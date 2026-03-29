@@ -1,0 +1,88 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="spooky-sky" x1="800" y1="0" x2="800" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#111214"/>
+      <stop offset="0.38" stop-color="#0A0B0D"/>
+      <stop offset="1" stop-color="#040506"/>
+    </linearGradient>
+    <radialGradient id="moon-glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1198 176) rotate(90) scale(142 142)">
+      <stop stop-color="#E6E6E0" stop-opacity="0.9"/>
+      <stop offset="0.34" stop-color="#CBCBC6" stop-opacity="0.42"/>
+      <stop offset="0.7" stop-color="#8C8D8A" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#8C8D8A" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="gate-glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(806 598) rotate(90) scale(204 352)">
+      <stop stop-color="#D2D2CC" stop-opacity="0.18"/>
+      <stop offset="0.36" stop-color="#B7B8B2" stop-opacity="0.1"/>
+      <stop offset="0.7" stop-color="#848580" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#B7B8B2" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="right-ground-glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1336 604) rotate(90) scale(118 196)">
+      <stop stop-color="#D0D0CA" stop-opacity="0.11"/>
+      <stop offset="0.4" stop-color="#ADAEA8" stop-opacity="0.06"/>
+      <stop offset="0.74" stop-color="#7D7E7A" stop-opacity="0.025"/>
+      <stop offset="1" stop-color="#ADAEA8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="fog-bank-left" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(430 636) rotate(90) scale(88 382)">
+      <stop stop-color="#D2D2CB" stop-opacity="0.05"/>
+      <stop offset="0.45" stop-color="#B1B2AC" stop-opacity="0.024"/>
+      <stop offset="1" stop-color="#B1B2AC" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="fog-bank-center" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(928 624) rotate(90) scale(100 470)">
+      <stop stop-color="#CCCCC6" stop-opacity="0.06"/>
+      <stop offset="0.42" stop-color="#ABACA7" stop-opacity="0.028"/>
+      <stop offset="1" stop-color="#ABACA7" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="fog-bank-right" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1260 654) rotate(90) scale(76 296)">
+      <stop stop-color="#C6C7C2" stop-opacity="0.04"/>
+      <stop offset="0.5" stop-color="#999A97" stop-opacity="0.018"/>
+      <stop offset="1" stop-color="#999A97" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="fog-sheet" x1="800" y1="548" x2="800" y2="792" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D0D0CA" stop-opacity="0"/>
+      <stop offset="0.16" stop-color="#D0D0CA" stop-opacity="0.024"/>
+      <stop offset="0.42" stop-color="#AAAAA6" stop-opacity="0.016"/>
+      <stop offset="0.72" stop-color="#80817E" stop-opacity="0.008"/>
+      <stop offset="1" stop-color="#090A0C" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="ground-fade" x1="800" y1="624" x2="800" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0B0C0E" stop-opacity="0"/>
+      <stop offset="0.3" stop-color="#090A0C" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#040506" stop-opacity="0.99"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#spooky-sky)"/>
+  <circle cx="1198" cy="176" r="142" fill="url(#moon-glow)"/>
+
+  <path
+    d="M0 234C146 194 294 194 440 220C608 250 744 274 890 252C1018 232 1148 178 1270 166C1392 154 1492 180 1600 230V0H0V234Z"
+    fill="#131417"
+    fill-opacity="0.24"
+  />
+  <path
+    d="M0 476C152 428 312 420 468 444C598 464 706 496 826 498C968 500 1082 454 1204 414C1328 374 1450 358 1600 378V610H0V476Z"
+    fill="#0C0D10"
+  />
+  <ellipse cx="806" cy="598" rx="352" ry="204" fill="url(#gate-glow)"/>
+  <ellipse cx="1336" cy="604" rx="196" ry="118" fill="url(#right-ground-glow)"/>
+  <path
+    d="M0 584C136 560 252 570 388 604C544 644 682 670 846 654C1012 638 1128 592 1272 580C1412 568 1518 596 1600 634V900H0V584Z"
+    fill="#090A0C"
+  />
+  <path
+    d="M0 560C142 542 266 548 394 582C550 622 682 638 824 628C978 618 1112 578 1260 570C1396 562 1514 578 1600 608V728C1498 706 1388 706 1258 726C1094 752 940 800 772 804C612 808 474 772 340 734C216 700 108 694 0 704V560Z"
+    fill="url(#fog-sheet)"
+  />
+  <ellipse cx="430" cy="636" rx="382" ry="88" fill="url(#fog-bank-left)"/>
+  <ellipse cx="928" cy="624" rx="470" ry="100" fill="url(#fog-bank-center)"/>
+  <ellipse cx="1260" cy="654" rx="296" ry="76" fill="url(#fog-bank-right)"/>
+  <path
+    d="M0 690C108 676 220 688 346 730C502 782 636 812 784 806C938 800 1064 744 1214 726C1364 708 1492 730 1600 776V900H0V690Z"
+    fill="#050608"
+  />
+  <path
+    d="M0 624H1600V900H0V624Z"
+    fill="url(#ground-fade)"
+  />
+</svg>
