@@ -1,0 +1,1443 @@
+{% extends "layouts/console_base.html" %}
+
+{% set page_title = "CreatureOS" %}
+{% set sidebar_title = "CreatureOS" %}
+{% set sidebar_kicker = "Ecosystem" %}
+{% set body_class = "dc-chat local-creature-app" %}
+{% set chat_empty = (active_view == "chats" and (messages | length) == 0) %}
+{% set onboarding_required = onboarding_state.required if onboarding_state is defined else false %}
+{% set onboarding_phase = onboarding_state.phase if onboarding_state is defined else "" %}
+{% set keeper_slug = onboarding_state.creature_slug if onboarding_state is defined and onboarding_state.creature_slug is defined else "" %}
+{% set keeper_conversation_id = onboarding_state.conversation_id if onboarding_state is defined and onboarding_state.conversation_id is defined else None %}
+{% macro render_onboarding_starter_link(summon_ready=true) -%}
+  <form
+    method="post"
+    action="/onboarding/starter"
+    class="onboarding-summon-form"
+    data-onboarding-starter-form
+    data-confirm-title="Summon Creature?"
+    data-confirm-message="Summon the first creature now, or go back to the conversation and keep shaping it a bit longer?"
+    data-confirm-confirm-label="Summon creature"
+    data-confirm-cancel-label="Go back"
+  >
+    <button type="submit" class="onboarding-summon-btn" data-onboarding-summon-button{% if not summon_ready %} disabled aria-disabled="true"{% endif %}>
+      <span class="onboarding-summon-btn-rune" aria-hidden="true">✦</span>
+      <span class="onboarding-summon-btn-label">Summon Creature</span>
+      <span class="onboarding-summon-btn-rune" aria-hidden="true">✦</span>
+    </button>
+  </form>
+{%- endmacro %}
+{% macro render_sidebar_redirect_fields(row_slug) -%}
+  <input type="hidden" name="redirect_creature" value="{{ selected_creature.slug if selected_creature else row_slug }}">
+  <input type="hidden" name="redirect_view" value="{{ active_view if selected_creature else 'creature' }}">
+  {% if selected_creature and selected_creature.slug == row_slug and active_view == 'chats' and selected_chat %}
+    <input type="hidden" name="conversation_id" value="{{ selected_chat.id }}">
+  {% endif %}
+  {% if selected_creature and selected_creature.slug == row_slug and active_view == 'activity' and selected_run %}
+    <input type="hidden" name="run_id" value="{{ selected_run.id }}">
+  {% endif %}
+{%- endmacro %}
+{% block body_attrs %} data-aud="creatureos" data-active-view="{{ active_view }}" data-chat-empty="{{ 'true' if chat_empty else 'false' }}" data-ecosystem="{{ settings_state.ecosystem.current if settings_state.ecosystem is defined else 'woodlands' }}" data-thinking-feed-label="{{ thinking_feed_label }}"{% endblock %}
+
+{% block head_extra %}
+  <link rel="stylesheet" href="/static/creature_os.css?v={{ static_version }}">
+  {% if onboarding_required and active_view == "onboarding-ecosystem" %}
+    {% for href in onboarding_state.ecosystem_preload_assets %}
+      <link rel="preload" as="image" href="{{ href }}" fetchpriority="high">
+    {% endfor %}
+  {% endif %}
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js"></script>
+{% endblock %}
+
+{% block sidebar_header_controls %}
+  {% if not onboarding_required %}
+    <a
+      class="creature-sidebar-control creature-sidebar-control--settings{% if active_view == 'settings' %} active{% endif %}"
+      href="/?view=settings"
+      aria-label="Open ecosystem settings"
+      data-tooltip="Ecosystem settings"
+    >
+      <span class="creature-sidebar-control-glow" aria-hidden="true"></span>
+      <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.85" d="M10.86 3.85h2.28l.54 1.97a6.3 6.3 0 0 1 1.52.88l1.88-.96 1.61 1.61-.96 1.88c.34.46.64.96.88 1.52l1.97.54v2.28l-1.97.54a6.3 6.3 0 0 1-.88 1.52l.96 1.88-1.61 1.61-1.88-.96a6.3 6.3 0 0 1-1.52.88l-.54 1.97h-2.28l-.54-1.97a6.3 6.3 0 0 1-1.52-.88l-1.88.96-1.61-1.61.96-1.88a6.3 6.3 0 0 1-.88-1.52l-1.97-.54v-2.28l1.97-.54c.24-.56.54-1.06.88-1.52l-.96-1.88 1.61-1.61 1.88.96a6.3 6.3 0 0 1 1.52-.88l.54-1.97Z"/>
+        <circle cx="12" cy="12" r="2.85" stroke-width="1.85"/>
+      </svg>
+    </a>
+  {% endif %}
+{% endblock %}
+
+{% block sidebar_nav %}
+  <div class="sidebar-chat-list">
+    {% if onboarding_required %}
+      {% if keeper_slug %}
+        <div class="settings-nav creature-switcher ecosystem-plain-list">
+          <button
+            type="button"
+            class="settings-nav-item ecosystem-creature-row{% if onboarding_phase != 'ecosystem' %} active{% endif %}"
+            aria-current="{% if onboarding_phase != 'ecosystem' %}page{% else %}false{% endif %}"
+          >
+            <span class="nav-label">{{ onboarding_state.keeper_name }}</span>
+          </button>
+        </div>
+      {% endif %}
+    {% else %}
+    <div class="ecosystem-nav">
+      {% if single_creatures %}
+        <div class="settings-nav creature-switcher ecosystem-plain-list">
+          {% for item in single_creatures %}
+            {% if item.intro_ready %}
+              <div class="creature-nav-row{% if selected_creature and item.slug == selected_creature.slug %} is-active{% endif %}">
+                <a
+                  class="settings-nav-item ecosystem-creature-row{% if selected_creature and item.slug == selected_creature.slug %} active{% endif %}"
+                  href="/?creature={{ item.slug }}&view={{ item.entry_target.view }}{% if item.entry_target.open_intro %}&intro=1{% elif item.entry_target.conversation_id %}&chat={{ item.entry_target.conversation_id }}{% endif %}"
+                  aria-current="{% if selected_creature and item.slug == selected_creature.slug %}page{% else %}false{% endif %}"
+                >
+                  <span class="nav-label">{{ item.display_name }}</span>
+                  <span class="creature-nav-meta">
+                    {% if item.has_urgent_indicator %}
+                      <span class="creature-nav-urgent-indicator" aria-label="Urgent update waiting"></span>
+                    {% endif %}
+                  </span>
+                </a>
+              </div>
+            {% elif item.intro_failed %}
+              <span
+                class="settings-nav-item ecosystem-creature-row ecosystem-creature-row--failed"
+                aria-disabled="true"
+              >
+                <span class="nav-label">{{ item.display_name }}</span>
+                <span class="creature-nav-status creature-nav-status--failed">
+                  <span class="creature-nav-status-dot creature-nav-status-dot--failed" aria-hidden="true"></span>
+                  Wake failed
+                </span>
+              </span>
+            {% else %}
+              <span
+                class="settings-nav-item ecosystem-creature-row ecosystem-creature-row--awakening"
+                aria-disabled="true"
+              >
+                <span class="nav-label">{{ item.display_name }}</span>
+                <span class="creature-nav-status creature-nav-status--awakening">
+                  <span class="creature-nav-status-dot creature-nav-status-dot--awakening" aria-hidden="true"></span>
+                  Awakening
+                </span>
+              </span>
+            {% endif %}
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      {% if not single_creatures %}
+        <div class="creature-sidebar-note ecosystem-empty-note">No creatures are here yet.</div>
+      {% endif %}
+    </div>
+
+    {% if selected_creature and active_view != "settings" %}
+      <div class="sidebar-divider" aria-hidden="true"></div>
+      {% if not selected_creature.is_keeper %}
+        <div class="settings-nav creature-view-toggle">
+          <a
+            class="settings-nav-item{% if active_view in ['creature', 'chats'] %} active{% endif %}"
+            href="/?creature={{ selected_creature.slug }}&view=chats"
+            aria-label="Start a new chat"
+          >
+            <span class="nav-label">Chats</span>
+          </a>
+          <a
+            class="settings-nav-item{% if active_view == 'activity' %} active{% endif %}"
+            href="/?creature={{ selected_creature.slug }}&view=activity"
+          >
+            <span class="nav-label">Habits</span>
+          </a>
+        </div>
+
+        <div class="sidebar-divider" aria-hidden="true"></div>
+
+        {% if active_view == "chats" or active_view == "creature" %}
+          <div class="settings-nav creature-create-row">
+            <a class="settings-nav-item" href="/?creature={{ selected_creature.slug }}&view=chats&new_chat=1" aria-label="Start a new chat">
+              <svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" focusable="false">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7.25 5.25h5.5a1.75 1.75 0 0 1 1.75 1.75v2.25"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M5.25 9v8a1.75 1.75 0 0 0 1.75 1.75h8a1.75 1.75 0 0 0 1.75-1.75v-5.25"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="m12.2 11.8 5.55-5.55a1.4 1.4 0 1 0-1.98-1.98L10.2 9.82 9.55 13.1l3.28-.65Z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="m14.65 5.35 3 3"/>
+              </svg>
+              <span class="nav-label">New chat</span>
+            </a>
+          </div>
+          <div class="settings-nav" id="chatList" aria-label="Chats">
+            {% for item in chats %}
+              <div class="chat-nav-row">
+                <a
+                  class="settings-nav-item{% if active_view == 'chats' and selected_chat and item.id == selected_chat.id %} active{% endif %}"
+                  href="/?creature={{ selected_creature.slug }}&view=chats&chat={{ item.id }}"
+                  data-conversation-id="{{ item.id }}"
+                >
+                  <span class="nav-label">{{ item.title }}</span>
+                </a>
+                <button
+                  type="button"
+                  class="chat-nav-menu"
+                  data-conversation-id="{{ item.id }}"
+                  data-rename-url="/creatures/{{ selected_creature.slug }}/chats/{{ item.id }}/rename"
+                  data-delete-url="/creatures/{{ selected_creature.slug }}/chats/{{ item.id }}/delete"
+                  data-current-conversation-id="{{ selected_chat.id if active_view == 'chats' and selected_chat else '' }}"
+                  aria-label="Chat actions"
+                  aria-haspopup="menu"
+                  aria-expanded="false"
+                >
+                  ⋯
+                </button>
+                <div class="chat-nav-menu-popover" data-conversation-id="{{ item.id }}" role="menu" hidden>
+                  <button
+                    type="button"
+                    class="chat-nav-menu-item"
+                    data-action="rename"
+                    data-conversation-id="{{ item.id }}"
+                    data-rename-url="/creatures/{{ selected_creature.slug }}/chats/{{ item.id }}/rename"
+                    role="menuitem"
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    class="chat-nav-menu-item chat-nav-menu-item--danger"
+                    data-action="delete"
+                    data-conversation-id="{{ item.id }}"
+                    data-delete-url="/creatures/{{ selected_creature.slug }}/chats/{{ item.id }}/delete"
+                    data-current-conversation-id="{{ selected_chat.id if active_view == 'chats' and selected_chat else '' }}"
+                    role="menuitem"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        {% elif active_view == "activity" %}
+          <div class="settings-nav creature-create-row">
+            <form method="post" action="/creatures/{{ selected_creature.slug }}/habits/new-chat">
+              <button type="submit" class="settings-nav-item" aria-label="Start a new habit conversation">
+                <svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" focusable="false">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7.25 5.25h5.5a1.75 1.75 0 0 1 1.75 1.75v2.25"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M5.25 9v8a1.75 1.75 0 0 0 1.75 1.75h8a1.75 1.75 0 0 0 1.75-1.75v-5.25"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="m12.2 11.8 5.55-5.55a1.4 1.4 0 1 0-1.98-1.98L10.2 9.82 9.55 13.1l3.28-.65Z"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="m14.65 5.35 3 3"/>
+                </svg>
+                <span class="nav-label">New habit</span>
+              </button>
+            </form>
+          </div>
+          <div class="settings-nav" aria-label="Habits">
+            {% if selected_habits %}
+              {% for item in selected_habits %}
+                <div class="chat-nav-row">
+                  <a
+                    class="settings-nav-item{% if selected_habit_id and item.id == selected_habit_id %} active{% endif %}"
+                    href="/?creature={{ selected_creature.slug }}&view=activity&habit={{ item.id }}#habit-{{ item.id }}"
+                    data-habit-id="{{ item.id }}"
+                  >
+                    <span class="nav-label">{{ item.title }}</span>
+                  </a>
+                </div>
+              {% endfor %}
+            {% else %}
+              <div class="creature-sidebar-note">
+                <div class="dc-box">
+                  <div class="dc-box-label">Habits</div>
+                  <p>No habits yet. Teach this creature something repeatable here.</p>
+                </div>
+              </div>
+            {% endif %}
+          </div>
+        {% else %}
+          <div class="creature-sidebar-note">
+            <div class="dc-box">
+              <div class="dc-box-label">Creature controls</div>
+              <p>{% if selected_creature and not selected_creature.can_delete %}Manage habits, memories, and workshop behavior for this protected creature.{% else %}Manage habits, workshop behavior, or release this creature from the habitat.{% endif %}</p>
+            </div>
+          </div>
+        {% endif %}
+      {% endif %}
+    {% elif active_view == "settings" %}
+      <div class="sidebar-divider" aria-hidden="true"></div>
+      <div class="creature-sidebar-note">
+        <div class="dc-box">
+          <div class="dc-box-label">Ecosystem Settings</div>
+          <p>Configure behavior that applies across the full CreatureOS ecosystem.</p>
+        </div>
+      </div>
+    {% endif %}
+    {% endif %}
+  </div>
+{% endblock %}
+
+{% block sidebar_footer %}
+  <div class="settings-nav creature-sidebar-footer">
+    <button
+      type="button"
+      class="settings-nav-item creature-sidebar-continue-row"
+      data-onboarding-panel-toggle
+      data-show-label="Show chooser"
+      data-hide-label="Hide chooser"
+      hidden
+    >
+      <svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" focusable="false">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16"/>
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 12h16"/>
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 17h16"/>
+      </svg>
+      <span class="nav-label">Hide chooser</span>
+    </button>
+    {% if onboarding_required and active_view != "onboarding-ecosystem" %}
+      <form
+        method="post"
+        action="/onboarding/restart"
+        data-confirm-title="Restart?"
+        data-confirm-message="Jump back to the ecosystem chooser."
+        data-confirm-confirm-label="Restart"
+      >
+        <button type="submit" class="settings-nav-item creature-sidebar-continue-row">
+          <svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" focusable="false">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 12a8 8 0 1 0 2.34-5.66"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h5"/>
+          </svg>
+          <span class="nav-label">Restart</span>
+        </button>
+      </form>
+    {% endif %}
+  </div>
+{% endblock %}
+{% block main %}
+  {% if active_view == "onboarding-ecosystem" %}
+    <div id="chatView" class="panel-view creature-detail-view onboarding-view">
+      <div class="panel-body">
+        <div class="creature-detail-shell onboarding-shell">
+          <div class="dc-box creature-detail-card creature-admin-card onboarding-card onboarding-card--ecosystem" data-onboarding-panel>
+            <div class="onboarding-heading onboarding-heading--ecosystem">
+              <h1>Choose an Ecosystem</h1>
+            </div>
+            <form method="post" action="/onboarding/ecosystem" class="onboarding-ecosystem-form" data-onboarding-ecosystem-form>
+              <input type="hidden" name="ecosystem_choice" value="{{ onboarding_state.ecosystem_current }}" data-onboarding-ecosystem-input>
+              <div class="onboarding-ecosystem-grid">
+                {% for item in onboarding_state.ecosystem_choices %}
+                  <button
+                    type="button"
+                    class="onboarding-ecosystem-card{% if onboarding_state.ecosystem_current == item.value %} is-selected{% endif %}"
+                    data-onboarding-ecosystem-option="{{ item.value }}"
+                  >
+                    <span class="onboarding-ecosystem-card-mark">
+                      <img src="{{ item.graphic }}" alt="" aria-hidden="true">
+                    </span>
+                    <span class="onboarding-ecosystem-card-copy">
+                      <span class="onboarding-ecosystem-card-title">{{ item.label }}</span>
+                    </span>
+                  </button>
+                {% endfor %}
+              </div>
+              <div class="onboarding-confirm-wrap">
+                <button type="submit" class="creature-action-btn onboarding-confirm-btn">Enter ecosystem</button>
+              </div>
+            </form>
+            <script type="application/json" id="onboardingEcosystemAssetManifest">{{ onboarding_state.ecosystem_asset_manifest | tojson }}</script>
+          </div>
+        </div>
+      </div>
+    </div>
+  {% elif active_view == "onboarding-starter" %}
+    <div id="chatView" class="panel-view">
+      <div class="panel-body">
+        <main id="chat">
+          <div class="chat-rail" id="chat-rail">
+            {% set assistant_turn = namespace(value=0) %}
+            {% for message in onboarding_state.chat_messages %}
+              <div class="row {% if message.role == 'user' %}user{% else %}assistant{% endif %}">
+                <div class="bubble{% if message.role == 'creature' %} bubble--full-span{% endif %}">
+                  {% if message.role == 'creature' %}
+                    {% set assistant_turn.value = assistant_turn.value + 1 %}
+                    <script type="text/plain" class="creature-markdown-source" data-markdown-source>{{ message.body }}</script>
+                    {% if assistant_turn.value == 1 %}
+                      <div
+                        class="creature-message-content creature-home-teaser creature-markdown-content--pending"
+                        data-typewriter-text="{{ message.typewriter_text }}"
+                        data-typewriter-speed="12"
+                        data-typewriter-markdown="true"
+                      >{{ message.typewriter_text }}</div>
+                    {% else %}
+                      {% if message.body %}
+                        <div class="creature-message-content creature-markdown-content--pending" data-markdown-target></div>
+                      {% endif %}
+                    {% endif %}
+                    {% if message.attachments %}
+                      <div class="creature-message-attachments">
+                        {% for attachment in message.attachments %}
+                          {% if attachment.is_image %}
+                            <a href="{{ attachment.url }}" class="creature-message-attachment creature-message-attachment--image" target="_blank" rel="noopener">
+                              <img src="{{ attachment.url }}" alt="{{ attachment.filename }}" loading="lazy">
+                              <span>{{ attachment.filename }}</span>
+                            </a>
+                          {% else %}
+                            <a href="{{ attachment.url }}" class="creature-message-attachment" target="_blank" rel="noopener">
+                              <strong>{{ attachment.filename }}</strong>
+                              <span>{{ attachment.size_label }}</span>
+                            </a>
+                          {% endif %}
+                        {% endfor %}
+                      </div>
+                    {% endif %}
+                  {% else %}
+                    {% if message.body %}
+                      <div class="creature-bubble-text">{{ message.body }}</div>
+                    {% endif %}
+                    {% if message.attachments %}
+                      <div class="creature-message-attachments">
+                        {% for attachment in message.attachments %}
+                          {% if attachment.is_image %}
+                            <a href="{{ attachment.url }}" class="creature-message-attachment creature-message-attachment--image" target="_blank" rel="noopener">
+                              <img src="{{ attachment.url }}" alt="{{ attachment.filename }}" loading="lazy">
+                              <span>{{ attachment.filename }}</span>
+                            </a>
+                          {% else %}
+                            <a href="{{ attachment.url }}" class="creature-message-attachment" target="_blank" rel="noopener">
+                              <strong>{{ attachment.filename }}</strong>
+                              <span>{{ attachment.size_label }}</span>
+                            </a>
+                          {% endif %}
+                        {% endfor %}
+                      </div>
+                    {% endif %}
+                  {% endif %}
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+          <div class="onboarding-summon-slot" data-onboarding-summon-slot{% if not onboarding_state.starter_ready %} hidden{% endif %}>
+            {% if onboarding_state.starter_ready %}
+              <div class="onboarding-summon-wrap">
+                {{ render_onboarding_starter_link(true) }}
+              </div>
+            {% endif %}
+          </div>
+        </main>
+        {% set onboarding_feed = onboarding_state.chat_feed if onboarding_state.chat_feed is defined else {} %}
+        {% set onboarding_feed_status = onboarding_feed.status if onboarding_feed.status is defined else 'idle' %}
+        {% set onboarding_feed_lines = onboarding_feed.lines if onboarding_feed.lines is defined else [] %}
+        {% set onboarding_thinking = onboarding_state.thinking if onboarding_state.thinking is defined else {} %}
+        <div class="composer onboarding-composer">
+          <details
+            class="creature-run-feed creature-run-feed--composer onboarding-run-feed"
+            id="creature-run-feed"
+            data-run-feed
+            data-onboarding-run-feed
+            {% if onboarding_feed_status != 'running' and not onboarding_feed_lines %}hidden{% endif %}
+          >
+            <summary>
+              <span data-run-feed-label>{{ 'Working' if onboarding_feed_status == 'running' else 'Listening' }}</span>
+              <span class="creature-run-feed-status" data-onboarding-feed-status data-state="{{ onboarding_feed_status }}">{{ onboarding_feed_status }}</span>
+            </summary>
+            <pre class="creature-run-feed-output" data-onboarding-feed-output{% if not onboarding_feed_lines %} data-waiting-placeholder="true"{% endif %}>{% if onboarding_feed_lines %}{% for item in onboarding_feed_lines %}{{ item }}{% if not loop.last %}{{ '\n' }}{% endif %}{% endfor %}{% else %}Waiting for first output…{% endif %}</pre>
+          </details>
+          <div class="creature-compose-shell onboarding-compose-shell">
+            <form class="creature-compose-form onboarding-compose-form" method="post" action="/onboarding/chat" enctype="multipart/form-data" data-onboarding-chat-form>
+              <input type="file" name="files" multiple hidden data-chat-upload-input>
+              <div class="bar">
+                <div class="creature-compose-input-row">
+                  <textarea
+                    id="input"
+                    name="body"
+                    rows="1"
+                    maxlength="4000"
+                    placeholder="Tell me what you need."
+                    data-onboarding-input
+                  ></textarea>
+                  <button class="btn-icon send" id="send" type="submit" aria-label="Send message">➤</button>
+                </div>
+              </div>
+              <div class="creature-compose-attachments" data-compose-attachments hidden></div>
+            </form>
+            <div class="creature-compose-meta-row">
+              <button class="creature-compose-meta-btn creature-compose-attach-btn" type="button" aria-label="Attach files" data-chat-upload-button>+</button>
+              {% if onboarding_state.creature_slug and onboarding_state.conversation_id %}
+                <form
+                  class="creature-compose-thinking-form"
+                  method="post"
+                  action="/creatures/{{ onboarding_state.creature_slug }}/conversations/{{ onboarding_state.conversation_id }}/thinking"
+                  data-chat-thinking-form
+                >
+                  <input type="hidden" name="view" value="chats">
+                  <div class="creature-compose-subtle-row">
+                    <span class="creature-compose-subtle-field">
+                      <select name="model_override" data-chat-thinking-field data-custom-select-variant="inline" aria-label="Chat thinking model">
+                        {% if onboarding_thinking.uses_creature_model %}
+                          <option value="" selected>{{ onboarding_thinking.model_label }}</option>
+                        {% endif %}
+                        {% for item in onboarding_thinking.model_choices %}
+                          {% if not (onboarding_thinking.uses_creature_model and item.value == onboarding_thinking.model) %}
+                            <option value="{{ item.value }}"{% if not onboarding_thinking.uses_creature_model and onboarding_thinking.conversation_model_override == item.value %} selected{% endif %}>{{ item.label }}</option>
+                          {% endif %}
+                        {% endfor %}
+                      </select>
+                    </span>
+                    <span class="creature-compose-subtle-field">
+                      <select name="reasoning_effort_override" data-chat-thinking-field data-custom-select-variant="inline" aria-label="Chat reasoning effort">
+                        {% if onboarding_thinking.uses_creature_reasoning_effort %}
+                          <option value="" selected>{{ onboarding_thinking.reasoning_effort_label }}</option>
+                        {% endif %}
+                        {% for item in onboarding_thinking.choices %}
+                          {% if not (onboarding_thinking.uses_creature_reasoning_effort and item.value == onboarding_thinking.reasoning_effort) %}
+                            <option value="{{ item.value }}"{% if not onboarding_thinking.uses_creature_reasoning_effort and onboarding_thinking.conversation_reasoning_effort_override == item.value %} selected{% endif %}>{{ item.label }}</option>
+                          {% endif %}
+                        {% endfor %}
+                      </select>
+                    </span>
+                    <span class="creature-compose-subtle-note" data-chat-thinking-note hidden></span>
+                  </div>
+                </form>
+              {% endif %}
+            </div>
+          </div>
+          <template data-onboarding-summon-template>
+            <div class="onboarding-summon-wrap">
+              {{ render_onboarding_starter_link(true) }}
+            </div>
+          </template>
+        </div>
+        <div class="onboarding-wait-modal" data-onboarding-wait-modal hidden>
+          <div class="onboarding-wait-backdrop" aria-hidden="true"></div>
+          <div class="onboarding-wait-card" role="status" aria-live="polite" aria-atomic="true">
+            <h2>The Keeper is summoning your first creature.</h2>
+            <p class="onboarding-wait-line" data-onboarding-wait-line>Preparing a name, purpose, and introduction…</p>
+            <div class="onboarding-wait-portal-stage" aria-hidden="true">
+              <div class="onboarding-wait-portal">
+                <span class="onboarding-wait-portal-ring onboarding-wait-portal-ring--outer"></span>
+                <span class="onboarding-wait-portal-ring onboarding-wait-portal-ring--middle"></span>
+                <span class="onboarding-wait-portal-ring onboarding-wait-portal-ring--inner"></span>
+                <span class="onboarding-wait-portal-core"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  {% elif active_view == "creature" %}
+    <div id="chatView" class="panel-view creature-detail-view{% if selected_creature and selected_creature.is_keeper %} creature-detail-view--keeper{% endif %}">
+      <div class="panel-body">
+        <div class="creature-detail-shell creature-creature-shell{% if selected_creature.is_keeper %} keeper-shell{% endif %}">
+          {% if selected_creature.is_keeper %}
+            <main id="chat" class="keeper-chat-stage onboarding-chat">
+              <div class="chat-rail keeper-chat-rail" id="chat-rail">
+                {% if selected_keeper_dialog.last_user_body %}
+                  <div class="row user">
+                    <div class="bubble">
+                      <div class="creature-bubble-text">{{ selected_keeper_dialog.last_user_body }}</div>
+                    </div>
+                  </div>
+                {% endif %}
+                <div class="row assistant">
+                  <div class="bubble bubble--full-span">
+                    <script type="text/plain" class="creature-markdown-source" data-markdown-source>{{ selected_keeper_dialog.body }}</script>
+                    {% if selected_keeper_dialog.typewriter_text %}
+                      <div
+                        class="creature-message-content creature-home-teaser creature-markdown-content--pending keeper-dialog-body"
+                        data-typewriter-text="{{ selected_keeper_dialog.typewriter_text }}"
+                        data-typewriter-once-key="{{ selected_keeper_dialog.typewriter_once_key }}"
+                        data-typewriter-speed="12"
+                        data-typewriter-markdown="true"
+                      >{{ selected_keeper_dialog.typewriter_text }}</div>
+                    {% else %}
+                      <div class="creature-message-content creature-markdown-content--pending keeper-dialog-body" data-markdown-target></div>
+                    {% endif %}
+                  </div>
+                </div>
+              </div>
+              <div class="onboarding-summon-slot" data-onboarding-summon-slot{% if not selected_keeper_dialog.summon_ready %} hidden{% endif %}>
+                {% if selected_keeper_dialog.summon_ready %}
+                  <div class="onboarding-summon-wrap">
+                    <form
+                      method="post"
+                      action="/creatures/{{ selected_creature.slug }}/summon"
+                      class="onboarding-summon-form"
+                      data-onboarding-starter-form
+                    >
+                      {% if selected_keeper_dialog.conversation_id %}
+                        <input type="hidden" name="conversation_id" value="{{ selected_keeper_dialog.conversation_id }}">
+                      {% endif %}
+                      <input type="hidden" name="view" value="creature">
+                      <button type="submit" class="onboarding-summon-btn" data-onboarding-summon-button>
+                        <span class="onboarding-summon-btn-rune" aria-hidden="true">✦</span>
+                        <span class="onboarding-summon-btn-label">Summon Creature</span>
+                        <span class="onboarding-summon-btn-rune" aria-hidden="true">✦</span>
+                      </button>
+                    </form>
+                  </div>
+                {% endif %}
+              </div>
+            </main>
+            <div class="composer onboarding-composer keeper-return-composer">
+              {% set keeper_thinking = selected_keeper_dialog.thinking if selected_keeper_dialog.thinking is defined else {} %}
+              <div class="creature-compose-shell onboarding-compose-shell">
+                <form
+                  class="creature-compose-form onboarding-compose-form keeper-compose-form"
+                  method="post"
+                  action="/creatures/{{ selected_creature.slug }}/messages"
+                  enctype="multipart/form-data"
+                >
+                  {% if selected_keeper_dialog.conversation_id %}
+                    <input type="hidden" name="conversation_id" value="{{ selected_keeper_dialog.conversation_id }}">
+                  {% endif %}
+                  <input type="hidden" name="view" value="creature">
+                  <input type="file" name="files" multiple hidden data-chat-upload-input>
+                  <div class="bar">
+                    <div class="creature-compose-input-row">
+                      <textarea id="input" name="body" rows="1" placeholder="{{ selected_keeper_dialog.reply_placeholder }}" maxlength="4000"></textarea>
+                      <button class="btn-icon send" id="send" type="submit" aria-label="Send message">➤</button>
+                    </div>
+                  </div>
+                  <div class="creature-compose-attachments" data-compose-attachments hidden></div>
+                </form>
+                <div class="creature-compose-meta-row">
+                  <button class="creature-compose-meta-btn creature-compose-attach-btn" type="button" aria-label="Attach files" data-chat-upload-button>+</button>
+                  {% if selected_keeper_dialog.conversation_id %}
+                    <form
+                      class="creature-compose-thinking-form"
+                      method="post"
+                      action="/creatures/{{ selected_creature.slug }}/conversations/{{ selected_keeper_dialog.conversation_id }}/thinking"
+                      data-chat-thinking-form
+                    >
+                      <input type="hidden" name="view" value="creature">
+                      <div class="creature-compose-subtle-row">
+                        <span class="creature-compose-subtle-field">
+                          <select name="model_override" data-chat-thinking-field data-custom-select-variant="inline" aria-label="Keeper thinking model">
+                            {% if keeper_thinking.uses_creature_model %}
+                              <option value="" selected>{{ keeper_thinking.model_label }}</option>
+                            {% endif %}
+                            {% for item in keeper_thinking.model_choices %}
+                              {% if not (keeper_thinking.uses_creature_model and item.value == keeper_thinking.model) %}
+                                <option value="{{ item.value }}"{% if not keeper_thinking.uses_creature_model and keeper_thinking.conversation_model_override == item.value %} selected{% endif %}>{{ item.label }}</option>
+                              {% endif %}
+                            {% endfor %}
+                          </select>
+                        </span>
+                        <span class="creature-compose-subtle-field">
+                          <select name="reasoning_effort_override" data-chat-thinking-field data-custom-select-variant="inline" aria-label="Keeper thinking effort">
+                            {% if keeper_thinking.uses_creature_reasoning_effort %}
+                              <option value="" selected>{{ keeper_thinking.reasoning_effort_label }}</option>
+                            {% endif %}
+                            {% for item in keeper_thinking.choices %}
+                              {% if not (keeper_thinking.uses_creature_reasoning_effort and item.value == keeper_thinking.reasoning_effort) %}
+                                <option value="{{ item.value }}"{% if not keeper_thinking.uses_creature_reasoning_effort and keeper_thinking.conversation_reasoning_effort_override == item.value %} selected{% endif %}>{{ item.label }}</option>
+                              {% endif %}
+                            {% endfor %}
+                          </select>
+                        </span>
+                        <span class="creature-compose-subtle-note" data-chat-thinking-note hidden></span>
+                      </div>
+                    </form>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          {% else %}
+            <div class="dc-box creature-detail-card creature-creature-stage">
+              <div class="creature-creature-stage-scroll">
+                <div class="creature-creature-header creature-creature-header--creature">
+                    <div>
+                      <div class="creature-creature-name-row">
+                        <h2>{{ selected_creature.display_name }}</h2>
+                        {% if selected_creature.is_keeper and selected_creature.role_label %}
+                          <span class="creature-runtime-badge creature-runtime-badge--header-role">{{ selected_creature.role_label }}</span>
+                        {% endif %}
+                      <span class="creature-header-meta-pill">
+                        Habits
+                        <strong>
+                          {{ selected_creature.habit_summary }}
+                        </strong>
+                      </span>
+                      <div class="creature-header-menu-wrap">
+                        <button
+                          type="button"
+                          class="creature-mini-action creature-header-menu-trigger"
+                          aria-label="Creature options"
+                          aria-expanded="false"
+                          data-creature-header-menu-trigger
+                        >
+                          <span aria-hidden="true">⋯</span>
+                        </button>
+                        <div class="creature-header-menu-popover" data-creature-header-menu-popover hidden>
+                          <button type="button" class="creature-header-menu-item" data-creature-modal-open="rename">Rename creature</button>
+                          <button type="button" class="creature-header-menu-item" data-creature-modal-open="owner-reference">Customize what it calls you</button>
+                          <button type="button" class="creature-header-menu-item" data-creature-modal-open="thinking">Customize thinking</button>
+                          <a href="/?creature={{ selected_creature.slug }}&view=activity" class="creature-header-menu-item">View habits</a>
+                          {% if selected_creature.can_delete %}
+                            <form
+                              method="post"
+                              action="/creatures/{{ selected_creature.slug }}/delete"
+                              class="creature-header-menu-form"
+                              data-confirm-title="Release creature?"
+                              data-confirm-message="Release {{ selected_creature.display_name }} from this habitat? This cannot be undone."
+                              data-confirm-confirm-label="Release creature"
+                              data-confirm-variant="danger"
+                            >
+                              <button type="submit" class="creature-header-menu-item creature-header-menu-item--danger">Release creature</button>
+                            </form>
+                          {% endif %}
+                        </div>
+                      </div>
+                    </div>
+                    <p class="creature-detail-copy">{{ selected_creature.purpose_summary or selected_creature.concern }}</p>
+                    <div class="creature-badge-row">
+                      {% if not selected_creature.is_keeper and not selected_creature.can_delete %}
+                        <span class="creature-runtime-badge creature-runtime-badge--muted">Protected from release</span>
+                      {% endif %}
+                    </div>
+                  </div>
+                </div>
+
+                {% if selected_creature.status == 'error' %}
+                  <div class="creature-creature-banner creature-creature-banner--warning">
+                    <span>This creature hit a problem on its last pass.</span>
+                    {% if selected_creature.last_error %}
+                      <span class="creature-creature-banner-detail">{{ selected_creature.last_error }}</span>
+                    {% endif %}
+                  </div>
+                {% endif %}
+
+                <div class="creature-creature-stream" aria-label="About {{ selected_creature.display_name }}">
+                  <article class="creature-creature-summary-card">
+                    <div class="creature-creature-summary-main">
+                      <div class="creature-creature-summary-text">
+                        Open a chat when you want {{ selected_creature.display_name }} to work with you directly.
+                        Visit <strong>Habits</strong> when you want to teach it recurring work.
+                      </div>
+                    </div>
+                  </article>
+                </div>
+              </div>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  {% elif active_view == "settings" %}
+    <div id="chatView" class="panel-view creature-detail-view">
+      <div class="panel-body">
+        <div class="creature-detail-shell creature-settings-shell">
+          <div class="dc-box creature-detail-card creature-admin-card creature-settings-stage">
+            <div class="creature-settings-stage-scroll">
+              <section class="creature-settings-section">
+                <form class="creature-admin-form creature-settings-form" method="post" action="/settings/owner-reference" data-autosave-form>
+                  <label class="creature-settings-field-row">
+                    <span class="creature-settings-field-label">Creatures call you</span>
+                    <select
+                      name="owner_reference_choice"
+                      aria-label="Creatures call you"
+                      data-autosave-on="change"
+                      data-owner-reference-select
+                    >
+                      {% for item in settings_state.choices %}
+                        <option value="{{ item.value }}"{% if settings_state.selected == item.value %} selected{% endif %}>{{ item.label }}</option>
+                      {% endfor %}
+                      <option value="__custom__"{% if settings_state.selected == '__custom__' %} selected{% endif %}>Custom</option>
+                    </select>
+                  </label>
+                  <label class="creature-settings-field-row" data-owner-reference-custom-wrap{% if settings_state.selected != '__custom__' %} hidden{% endif %}>
+                    <span class="creature-settings-field-label">Custom name</span>
+                    <input
+                      type="text"
+                      name="owner_reference_custom"
+                      value="{{ settings_state.custom }}"
+                      placeholder="Try your first name"
+                      data-autosave-on="input"
+                    >
+                  </label>
+                </form>
+              </section>
+
+              <section class="creature-settings-section">
+                <form class="creature-admin-form creature-settings-form" method="post" action="/settings/ecosystem" data-autosave-form>
+                  <label class="creature-settings-field-row">
+                    <span class="creature-settings-field-label">Current location</span>
+                    <select
+                      name="ecosystem_choice"
+                      aria-label="Current location"
+                      data-autosave-on="change"
+                    >
+                      {% for item in settings_state.ecosystem.choices %}
+                        <option value="{{ item.value }}"{% if settings_state.ecosystem.current == item.value %} selected{% endif %}>{{ item.label }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                </form>
+              </section>
+
+              <section class="creature-settings-section">
+                <form class="creature-admin-form creature-settings-form" method="post" action="/settings/timezone" data-autosave-form>
+                  <label class="creature-settings-field-row">
+                    <span class="creature-settings-field-label">Time zone</span>
+                    <select
+                      name="timezone_choice"
+                      aria-label="Time zone"
+                      data-autosave-on="change"
+                    >
+                      {% for item in settings_state.timezone.choices %}
+                        <option value="{{ item.value }}"{% if settings_state.timezone.current == item.value %} selected{% endif %}>{{ item.label }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                </form>
+              </section>
+
+              <section class="creature-settings-section">
+                <form class="creature-admin-form creature-settings-form creature-settings-thinking-form" method="post" action="/settings/thinking" data-autosave-form>
+                  <label class="creature-settings-field-row">
+                    <span class="creature-settings-field-label">Default thinking model</span>
+                    <select name="model" aria-label="Default thinking model" data-autosave-on="change">
+                      {% for item in settings_state.thinking.model_choices %}
+                        <option value="{{ item.value }}"{% if settings_state.thinking.model == item.value %} selected{% endif %}>{{ item.label }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                  <label class="creature-settings-field-row">
+                    <span class="creature-settings-field-label">Default effort</span>
+                    <select name="reasoning_effort" aria-label="Default reasoning effort" data-autosave-on="change">
+                      {% for item in settings_state.thinking.choices %}
+                        <option value="{{ item.value }}"{% if settings_state.thinking.reasoning_effort == item.value %} selected{% endif %}>{{ item.label }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                </form>
+              </section>
+
+              <section class="creature-settings-section creature-settings-section--codex">
+                <div class="creature-settings-readonly creature-settings-readonly--codex creature-codex-access">
+                  <div class="creature-codex-access-header">
+                    <div class="dc-box-label">Codex Usage</div>
+                    <div class="creature-codex-access-meta">
+                      <span>Last checked {{ settings_state.codex_access.last_checked_at_relative }}</span>
+                    </div>
+                  </div>
+                  {% if settings_state.codex_access.limits.available %}
+                    <div class="creature-codex-access-grid">
+                      <div class="creature-codex-access-card">
+                        <span class="creature-codex-access-card-label">5-hour allowance</span>
+                        <strong class="creature-codex-access-card-value">{{ settings_state.codex_access.limits.primary.left_percent_label }} left</strong>
+                        <span class="creature-codex-access-card-meta">Resets {{ settings_state.codex_access.limits.primary.resets_at_display }}</span>
+                      </div>
+                      <div class="creature-codex-access-card">
+                        <span class="creature-codex-access-card-label">Weekly allowance</span>
+                        <strong class="creature-codex-access-card-value">{{ settings_state.codex_access.limits.secondary.left_percent_label }} left</strong>
+                        <span class="creature-codex-access-card-meta">Resets {{ settings_state.codex_access.limits.secondary.resets_at_display }}</span>
+                      </div>
+                    </div>
+                  {% endif %}
+                  {% if settings_state.codex_access.last_error %}
+                    <div class="creature-codex-access-note creature-codex-access-note--warning">{{ settings_state.codex_access.last_error }}</div>
+                  {% endif %}
+                </div>
+              </section>
+
+              <section class="creature-settings-section creature-settings-section--support">
+                <div class="creature-settings-inline-form creature-settings-inline-form--support">
+                  <a
+                    class="creature-action-btn creature-action-btn-secondary creature-settings-support-link"
+                    href="https://creatureos.com/donate"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Feed the ecosystem
+                  </a>
+                  <div class="creature-settings-inline-copy creature-settings-inline-copy--detail">
+                    <span class="creature-detail-copy">If CreatureOS has been useful, you can support it here.</span>
+                  </div>
+                </div>
+              </section>
+
+              <section class="creature-settings-section creature-settings-section--danger">
+                <form
+                  class="creature-settings-inline-form creature-settings-inline-form--danger"
+                  method="post"
+                  action="/settings/start-fresh"
+                  data-confirm-title="Restart onboarding?"
+                  data-confirm-message="Release every creature, clear the habitat, and restart CreatureOS from scratch."
+                  data-confirm-confirm-label="Start fresh"
+                  data-confirm-variant="danger"
+                >
+                  <button type="submit" class="creature-action-btn creature-action-btn-danger">Start fresh</button>
+                  <div class="creature-settings-inline-copy creature-settings-inline-copy--detail">
+                    <span class="creature-detail-copy">Release every creature, clear the habitat, and restart first-run onboarding.</span>
+                  </div>
+                </form>
+              </section>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  {% elif active_view == "activity" %}
+    <div id="chatView" class="panel-view creature-detail-view">
+      <div class="panel-body">
+        <div class="creature-detail-shell activity-feed-shell">
+          {% if selected_habit %}
+            <article
+              id="habit-{{ selected_habit.id }}"
+              class="dc-box creature-detail-card activity-post-detail-card activity-post-detail-card--summary is-selected-habit"
+            >
+              <div class="activity-post-header">
+                <div class="activity-post-header-main">
+                  <div class="activity-post-chip-row">
+                    <span class="activity-post-chip">Skill</span>
+                    <span class="activity-post-chip">{{ "Active" if selected_habit.enabled else "Paused" }}</span>
+                    <span class="activity-post-chip">{{ selected_habit.schedule_summary }}</span>
+                  </div>
+                  <h3 class="activity-post-title">{{ selected_habit.title }}</h3>
+                  <div class="activity-post-meta-line">
+                    <span>{% if selected_habit.last_run_at %}Last run {{ selected_habit.last_run_at_display }}{% else %}Not run yet{% endif %}</span>
+                    <span>{% if selected_habit.next_run_at %}Next {{ selected_habit.next_run_at_display }}{% else %}No next run scheduled{% endif %}</span>
+                  </div>
+                </div>
+                <div class="activity-post-header-actions">
+                  <form method="post" action="/creatures/{{ selected_creature.slug }}/habits/{{ selected_habit.id }}/run">
+                    <input type="hidden" name="view" value="activity">
+                    <button type="submit" class="creature-mini-action">Run now</button>
+                  </form>
+                  <form method="post" action="/creatures/{{ selected_creature.slug }}/habits/{{ selected_habit.id }}/{% if selected_habit.enabled %}pause{% else %}resume{% endif %}">
+                    <input type="hidden" name="view" value="activity">
+                    <button type="submit" class="creature-mini-action">{% if selected_habit.enabled %}Pause{% else %}Resume{% endif %}</button>
+                  </form>
+                  <form method="post" action="/creatures/{{ selected_creature.slug }}/habits/{{ selected_habit.id }}/delete" data-confirm-title="Delete habit?" data-confirm-message="Delete {{ selected_habit.title }}?" data-confirm-confirm-label="Delete habit" data-confirm-variant="danger">
+                    <input type="hidden" name="view" value="activity">
+                    <button type="submit" class="creature-mini-action">Delete</button>
+                  </form>
+                </div>
+              </div>
+              <p class="creature-detail-copy">{{ selected_habit.instructions }}</p>
+              {% if selected_habit.last_summary %}
+                <div class="creature-detail-meta">
+                  <span>Last summary <strong>{{ selected_habit.last_summary }}</strong></span>
+                </div>
+              {% endif %}
+            </article>
+          {% elif selected_habits %}
+            <p class="creature-detail-copy">Pick a habit from the sidebar to see its history.</p>
+          {% else %}
+            <p class="creature-detail-copy">This creature has not been taught any habits yet.</p>
+          {% endif %}
+          <div class="activity-feed">
+            {% if selected_habit %}
+              <div class="dc-box-label">Run log</div>
+            {% endif %}
+            {% for item in selected_activity_feed %}
+              <article class="dc-box creature-detail-card activity-post activity-post--{{ item.severity or 'info' }}" data-activity-post>
+                <div class="activity-post-header">
+                  <div class="activity-post-header-main">
+                    <div class="activity-post-chip-row">
+                      {% if item.habit_title %}
+                        <span class="activity-post-chip">Skill {{ item.habit_title }}</span>
+                      {% endif %}
+                      <span class="activity-post-chip activity-post-chip--severity activity-post-chip--{{ item.severity or 'info' }}">{{ (item.severity or "info")|upper }}</span>
+                    </div>
+                    <h3 class="activity-post-title">{{ item.summary or (item.trigger_type|replace('_', ' ')|title) }}</h3>
+                    <div class="activity-post-meta-line">
+                      <span>Started {{ item.started_at_display }}</span>
+                      {% if item.finished_at %}
+                        <span>Finished {{ item.finished_at_display }}</span>
+                      {% endif %}
+                    </div>
+                  </div>
+                  <div class="activity-post-header-actions">
+                    <form method="post" action="/creatures/{{ selected_creature.slug }}/runs/{{ item.id }}/spawn-chat">
+                      <button type="submit" class="creature-mini-action activity-post-chat-action">Chat</button>
+                    </form>
+                    <button type="button" class="creature-mini-action activity-toggle" data-activity-toggle aria-expanded="false">Details</button>
+                  </div>
+                </div>
+                {% if item.message_text or item.activity_note %}
+                  <div class="activity-post-summary-card">
+                    <div class="activity-post-summary-label">{% if item.message_text %}What I’d tell you{% else %}What happened{% endif %}</div>
+                    <p class="activity-post-summary-copy">{{ item.message_text or item.activity_note }}</p>
+                  </div>
+                {% endif %}
+                <div class="activity-post-body is-collapsed" data-activity-body>
+                  <div class="activity-post-details">
+                    {% if item.activity_note %}
+                      <div class="creature-detail-section activity-post-detail-card">
+                        <div class="dc-box-label">Run note</div>
+                        <p class="creature-detail-copy">{{ item.activity_note }}</p>
+                      </div>
+                    {% endif %}
+                    {% if item.message_text %}
+                      <div class="creature-detail-section activity-post-detail-card">
+                        <div class="dc-box-label">Human-facing note</div>
+                        <div class="creature-bubble-text">{{ item.message_text }}</div>
+                      </div>
+                    {% endif %}
+                    {% if item.evidence %}
+                      <div class="creature-detail-section activity-post-detail-card">
+                        <div class="dc-box-label">Evidence</div>
+                        <ul class="creature-detail-list">
+                          {% for evidence_item in item.evidence %}
+                            <li>{{ evidence_item }}</li>
+                          {% endfor %}
+                        </ul>
+                      </div>
+                    {% endif %}
+                    {% if item.suggestions %}
+                      <div class="creature-detail-section activity-post-detail-card">
+                        <div class="dc-box-label">Suggestions</div>
+                        <ul class="creature-detail-list">
+                          {% for suggestion in item.suggestions %}
+                            <li>{{ suggestion }}</li>
+                          {% endfor %}
+                        </ul>
+                      </div>
+                    {% endif %}
+                    {% if item.agenda_items %}
+                      <div class="creature-detail-section activity-post-detail-card">
+                        <div class="dc-box-label">Active worklist</div>
+                        <ul class="creature-detail-list">
+                          {% for agenda_item in item.agenda_items %}
+                            <li>[{{ agenda_item.priority.upper() }}] {{ agenda_item.title }}</li>
+                          {% endfor %}
+                        </ul>
+                      </div>
+                    {% endif %}
+                    {% if item.backlog_items %}
+                      <div class="creature-detail-section activity-post-detail-card">
+                        <div class="dc-box-label">Parked worklist</div>
+                        <ul class="creature-detail-list">
+                          {% for backlog_item in item.backlog_items %}
+                            <li>{{ backlog_item }}</li>
+                          {% endfor %}
+                        </ul>
+                      </div>
+                    {% endif %}
+                    {% if item.files_touched %}
+                      <div class="creature-detail-section activity-post-detail-card">
+                        <div class="dc-box-label">Files touched</div>
+                        <ul class="creature-detail-list">
+                          {% for touched in item.files_touched %}
+                            <li><code>{{ touched }}</code></li>
+                          {% endfor %}
+                        </ul>
+                      </div>
+                    {% endif %}
+                    {% if item.tests_run %}
+                      <div class="creature-detail-section activity-post-detail-card">
+                        <div class="dc-box-label">Tests run</div>
+                        <ul class="creature-detail-list">
+                          {% for test_item in item.tests_run %}
+                            <li><code>{{ test_item }}</code></li>
+                          {% endfor %}
+                        </ul>
+                      </div>
+                    {% endif %}
+                    {% if item.next_focus %}
+                      <div class="creature-detail-section activity-post-detail-card">
+                        <div class="dc-box-label">Next focus</div>
+                        <div class="creature-bubble-text">{{ item.next_focus }}</div>
+                      </div>
+                    {% endif %}
+                    {% if item.memory_actions %}
+                      <div class="creature-detail-section activity-post-detail-card">
+                        <div class="dc-box-label">Memory actions</div>
+                        <ul class="creature-detail-list">
+                          {% for memory_item in item.memory_actions %}
+                            <li>{{ memory_item.action }}{% if memory_item.record_id %} #{{ memory_item.record_id }}{% endif %} {% if memory_item.body %}{{ memory_item.body }}{% endif %}</li>
+                          {% endfor %}
+                        </ul>
+                      </div>
+                    {% endif %}
+                    {% if item.previous_thread_id or item.new_thread_id %}
+                      <div class="creature-detail-section activity-post-detail-card">
+                        <div class="dc-box-label">Thread</div>
+                        {% if item.previous_thread_id %}
+                          <div class="creature-bubble-text">Previous: <code>{{ item.previous_thread_id }}</code></div>
+                        {% endif %}
+                        {% if item.new_thread_id %}
+                          <div class="creature-bubble-text">Current: <code>{{ item.new_thread_id }}</code></div>
+                        {% endif %}
+                      </div>
+                    {% endif %}
+                    {% if item.spawned_conversation_title %}
+                      <div class="creature-detail-section activity-post-detail-card">
+                        <div class="dc-box-label">Auto-spawned chat</div>
+                        <div class="creature-bubble-text">{{ item.spawned_conversation_title }}</div>
+                      </div>
+                    {% endif %}
+                    {% if item.notes_storage %}
+                      <div class="creature-detail-section activity-post-detail-card">
+                        <div class="dc-box-label">Storage</div>
+                        <code>{{ item.notes_storage }}</code>
+                      </div>
+                    {% endif %}
+                  </div>
+                </div>
+              </article>
+            {% endfor %}
+            {% if selected_habit and not selected_activity_feed %}
+              <p class="creature-detail-copy">This skill has not logged any completed runs yet.</p>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </div>
+  {% else %}
+    <div id="chatView" class="panel-view">
+      <div class="panel-body">
+        <main id="chat">
+          <div class="chat-rail" id="chat-rail">
+            {% if messages %}
+              {% for message in messages %}
+                <div class="row {% if message.role == 'user' %}user{% elif message.role == 'creature' %}assistant{% else %}system{% endif %}">
+                  <div class="bubble">
+                    {% if message.role == 'system' %}
+                    <div class="dc-box dc-box--warning">
+                        <div class="dc-box-label">System</div>
+                        {% if message.body %}
+                          <script type="text/plain" class="creature-markdown-source" data-markdown-source>{{ message.body }}</script>
+                          <div class="creature-message-content creature-markdown-content--pending" data-markdown-target></div>
+                        {% endif %}
+                        {% if message.attachments %}
+                          <div class="creature-message-attachments">
+                            {% for attachment in message.attachments %}
+                              {% if attachment.is_image %}
+                                <a href="{{ attachment.url }}" class="creature-message-attachment creature-message-attachment--image" target="_blank" rel="noopener">
+                                  <img src="{{ attachment.url }}" alt="{{ attachment.filename }}" loading="lazy">
+                                  <span>{{ attachment.filename }}</span>
+                                </a>
+                              {% else %}
+                                <a href="{{ attachment.url }}" class="creature-message-attachment" target="_blank" rel="noopener">
+                                  <strong>{{ attachment.filename }}</strong>
+                                  <span>{{ attachment.size_label }}</span>
+                                </a>
+                              {% endif %}
+                            {% endfor %}
+                          </div>
+                        {% endif %}
+                      </div>
+                    {% elif message.role == 'creature' %}
+                      {% if message.body %}
+                        <script type="text/plain" class="creature-markdown-source" data-markdown-source>{{ message.body }}</script>
+                        <div class="creature-message-content creature-markdown-content--pending" data-markdown-target></div>
+                      {% endif %}
+                      {% if message.attachments %}
+                        <div class="creature-message-attachments">
+                          {% for attachment in message.attachments %}
+                            {% if attachment.is_image %}
+                              <a href="{{ attachment.url }}" class="creature-message-attachment creature-message-attachment--image" target="_blank" rel="noopener">
+                                <img src="{{ attachment.url }}" alt="{{ attachment.filename }}" loading="lazy">
+                                <span>{{ attachment.filename }}</span>
+                              </a>
+                            {% else %}
+                              <a href="{{ attachment.url }}" class="creature-message-attachment" target="_blank" rel="noopener">
+                                <strong>{{ attachment.filename }}</strong>
+                                <span>{{ attachment.size_label }}</span>
+                              </a>
+                            {% endif %}
+                          {% endfor %}
+                        </div>
+                      {% endif %}
+                    {% else %}
+                      {% if message.body %}
+                        <div class="creature-bubble-text">{{ message.body }}</div>
+                      {% endif %}
+                      {% if message.attachments %}
+                        <div class="creature-message-attachments">
+                          {% for attachment in message.attachments %}
+                            {% if attachment.is_image %}
+                              <a href="{{ attachment.url }}" class="creature-message-attachment creature-message-attachment--image" target="_blank" rel="noopener">
+                                <img src="{{ attachment.url }}" alt="{{ attachment.filename }}" loading="lazy">
+                                <span>{{ attachment.filename }}</span>
+                              </a>
+                            {% else %}
+                              <a href="{{ attachment.url }}" class="creature-message-attachment" target="_blank" rel="noopener">
+                                <strong>{{ attachment.filename }}</strong>
+                                <span>{{ attachment.size_label }}</span>
+                              </a>
+                            {% endif %}
+                          {% endfor %}
+                        </div>
+                      {% endif %}
+                    {% endif %}
+                  </div>
+                </div>
+              {% endfor %}
+            {% endif %}
+          </div>
+        </main>
+
+        {% if selected_creature and active_view == 'chats' %}
+          <div class="composer chat-compose">
+            {% if selected_busy_state and selected_busy_state.is_busy %}
+              <div class="creature-compose-mode">
+                <p><strong>{{ selected_busy_state.headline }}</strong></p>
+                <p>{{ selected_busy_state.detail }}</p>
+              </div>
+            {% endif %}
+            <details
+              class="creature-run-feed creature-run-feed--composer"
+              id="creature-run-feed"
+              data-run-feed
+              {% if selected_chat and active_run and active_run.status == 'running' %}
+                data-run-id="{{ active_run.id }}"
+                data-run-status="{{ active_run.status }}"
+                data-stream-url="/creatures/{{ selected_creature.slug }}/runs/{{ active_run.id }}/stream"
+                data-last-event-id="{{ active_run_last_event_id }}"
+              {% else %}
+                data-run-status="idle"
+                hidden
+              {% endif %}
+            >
+              <summary>
+                <span class="creature-compose-subtle-toggle-label" data-run-feed-label>{% if selected_chat and active_run and active_run.status == 'running' %}Working{% else %}Listening{% endif %}</span>
+                <span class="creature-run-feed-status" data-state="{% if selected_chat and active_run and active_run.status == 'running' %}{{ active_run.status }}{% else %}idle{% endif %}">{% if selected_chat and active_run and active_run.status == 'running' %}live{% else %}idle{% endif %}</span>
+              </summary>
+              <pre class="creature-run-feed-output" id="creature-run-feed-output"{% if not (selected_chat and active_run and active_run.status == 'running' and active_run_events) %} data-waiting-placeholder="true"{% endif %}>{% if selected_chat and active_run and active_run.status == 'running' and active_run_events %}{% for item in active_run_events %}{{ item.display_body }}{% if not loop.last %}{{ '\n' }}{% endif %}{% endfor %}{% else %}Waiting for first output…{% endif %}</pre>
+            </details>
+            <div class="creature-compose-shell{% if selected_busy_state and selected_busy_state.is_busy %} is-busy{% endif %}">
+              <form
+                class="creature-compose-form"
+                id="creature-compose-message-form"
+                method="post"
+                action="/creatures/{{ selected_creature.slug }}/messages"
+                enctype="multipart/form-data"
+              >
+                {% if selected_chat %}
+                  <input type="hidden" name="conversation_id" value="{{ selected_chat.id }}">
+                {% else %}
+                  <input type="hidden" name="draft_chat" value="1">
+                {% endif %}
+                <input type="file" name="files" multiple hidden data-chat-upload-input>
+                <div class="bar{% if selected_busy_state and selected_busy_state.is_busy %} bar--busy{% endif %}">
+                  <div class="creature-compose-input-row">
+                    <textarea id="input" name="body" rows="1" placeholder="Message {{ selected_creature.display_name }}…" maxlength="4000"></textarea>
+                    {% if not (selected_busy_state and selected_busy_state.is_busy) %}
+                      <button class="btn-icon send" id="send" type="submit" aria-label="Send message">➤</button>
+                    {% endif %}
+                  </div>
+                </div>
+                <div class="creature-compose-attachments" data-compose-attachments hidden></div>
+                {% if selected_busy_state and selected_busy_state.is_busy %}
+                  <div class="creature-compose-actions">
+                    <button class="creature-action-btn creature-action-btn-secondary creature-compose-submit" type="submit" name="busy_action" value="steer">Steer now</button>
+                    <button class="creature-action-btn creature-compose-submit is-active" type="submit" name="busy_action" value="queue" data-busy-default-submit>Queue</button>
+                  </div>
+                {% endif %}
+              </form>
+              <div class="creature-compose-meta-row">
+                <button class="creature-compose-meta-btn creature-compose-attach-btn" type="button" aria-label="Attach files" data-chat-upload-button>+</button>
+                {% if selected_chat %}
+                  <form
+                    class="creature-compose-thinking-form"
+                    method="post"
+                    action="/creatures/{{ selected_creature.slug }}/conversations/{{ selected_chat.id }}/thinking"
+                    data-chat-thinking-form
+                  >
+                    <input type="hidden" name="view" value="chats">
+                    <div class="creature-compose-subtle-row">
+                      <span class="creature-compose-subtle-field">
+                        <select name="model_override" data-chat-thinking-field data-custom-select-variant="inline" aria-label="Chat thinking model">
+                          {% if selected_chat.thinking.uses_creature_model %}
+                            <option value="" selected>{{ selected_chat.thinking.model_label }}</option>
+                          {% endif %}
+                          {% for item in selected_chat.thinking.model_choices %}
+                            {% if not (selected_chat.thinking.uses_creature_model and item.value == selected_chat.thinking.model) %}
+                              <option value="{{ item.value }}"{% if not selected_chat.thinking.uses_creature_model and selected_chat.thinking.conversation_model_override == item.value %} selected{% endif %}>{{ item.label }}</option>
+                            {% endif %}
+                          {% endfor %}
+                        </select>
+                      </span>
+                      <span class="creature-compose-subtle-field">
+                        <select name="reasoning_effort_override" data-chat-thinking-field data-custom-select-variant="inline" aria-label="Chat reasoning effort">
+                          {% if selected_chat.thinking.uses_creature_reasoning_effort %}
+                            <option value="" selected>{{ selected_chat.thinking.reasoning_effort_label }}</option>
+                          {% endif %}
+                          {% for item in selected_chat.thinking.choices %}
+                            {% if not (selected_chat.thinking.uses_creature_reasoning_effort and item.value == selected_chat.thinking.reasoning_effort) %}
+                              <option value="{{ item.value }}"{% if not selected_chat.thinking.uses_creature_reasoning_effort and selected_chat.thinking.conversation_reasoning_effort_override == item.value %} selected{% endif %}>{{ item.label }}</option>
+                            {% endif %}
+                          {% endfor %}
+                        </select>
+                      </span>
+                      <span class="creature-compose-subtle-note" data-chat-thinking-note hidden></span>
+                    </div>
+                  </form>
+                {% else %}
+                  <div class="creature-compose-thinking-form" data-draft-thinking-form>
+                    <div class="creature-compose-subtle-row">
+                      <span class="creature-compose-subtle-field">
+                        <select
+                          name="model_override"
+                          form="creature-compose-message-form"
+                          data-draft-thinking-field
+                          data-custom-select-variant="inline"
+                          aria-label="Draft chat thinking model"
+                        >
+                          {% if selected_creature.thinking.uses_global_model %}
+                            <option value="" selected>{{ selected_creature.thinking.model_label }}</option>
+                          {% endif %}
+                          {% for item in selected_creature.thinking.model_choices %}
+                            {% if not (selected_creature.thinking.uses_global_model and item.value == selected_creature.thinking.model) %}
+                              <option value="{{ item.value }}"{% if not selected_creature.thinking.uses_global_model and selected_creature.thinking.model_override == item.value %} selected{% endif %}>{{ item.label }}</option>
+                            {% endif %}
+                          {% endfor %}
+                        </select>
+                      </span>
+                      <span class="creature-compose-subtle-field">
+                        <select
+                          name="reasoning_effort_override"
+                          form="creature-compose-message-form"
+                          data-draft-thinking-field
+                          data-custom-select-variant="inline"
+                          aria-label="Draft chat reasoning effort"
+                        >
+                          {% if selected_creature.thinking.uses_global_reasoning_effort %}
+                            <option value="" selected>{{ selected_creature.thinking.reasoning_effort_label }}</option>
+                          {% endif %}
+                          {% for item in selected_creature.thinking.choices %}
+                            {% if not (selected_creature.thinking.uses_global_reasoning_effort and item.value == selected_creature.thinking.reasoning_effort) %}
+                              <option value="{{ item.value }}"{% if not selected_creature.thinking.uses_global_reasoning_effort and selected_creature.thinking.reasoning_effort_override == item.value %} selected{% endif %}>{{ item.label }}</option>
+                            {% endif %}
+                          {% endfor %}
+                        </select>
+                      </span>
+                    </div>
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+
+{% endblock %}
+
+{% block modals %}
+  {% if selected_creature and active_view == "creature" %}
+    <div class="creature-sheet-modal" data-creature-sheet-modal="rename" hidden>
+      <div class="creature-sheet-backdrop" data-creature-sheet-close aria-hidden="true"></div>
+      <div class="creature-sheet-card" role="dialog" aria-modal="true" aria-labelledby="renameCreatureTitle">
+        <div class="creature-sheet-kicker">Creature action</div>
+        <h2 id="renameCreatureTitle">Rename creature</h2>
+        <form method="post" action="/creatures/{{ selected_creature.slug }}/rename" class="creature-inline-form creature-sheet-form">
+          <input type="hidden" name="view" value="creature">
+          <label>
+            Creature name
+            <input
+              type="text"
+              name="display_name"
+              value="{{ selected_creature.display_name }}"
+              maxlength="48"
+              autocomplete="off"
+              required
+              data-creature-sheet-autofocus
+            >
+          </label>
+          <p class="creature-sheet-hint">Keep it short and recognizable. Up to 48 characters.</p>
+          <div class="creature-sheet-actions">
+            <button type="button" class="creature-action-btn creature-action-btn-secondary" data-creature-sheet-close>Cancel</button>
+            <button type="submit" class="creature-action-btn creature-action-btn-secondary">Save name</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div class="creature-sheet-modal" data-creature-sheet-modal="thinking" hidden>
+      <div class="creature-sheet-backdrop" data-creature-sheet-close aria-hidden="true"></div>
+      <div class="creature-sheet-card" role="dialog" aria-modal="true" aria-labelledby="thinkingCreatureTitle">
+        <div class="creature-sheet-kicker">Creature action</div>
+        <h2 id="thinkingCreatureTitle">Customize thinking</h2>
+        <form method="post" action="/creatures/{{ selected_creature.slug }}/thinking" class="creature-inline-form creature-sheet-form" data-creature-sheet-autosave-form>
+          <input type="hidden" name="view" value="creature">
+          <label>
+            Thinking model
+            <select name="model_override" data-creature-sheet-autofocus data-creature-sheet-autosave-on="change">
+              <option value=""{% if selected_creature.thinking.uses_global_model %} selected{% endif %}>Use general setting ({{ selected_creature.thinking.global_model }})</option>
+              {% for item in selected_creature.thinking.model_choices %}
+                <option value="{{ item.value }}"{% if not selected_creature.thinking.uses_global_model and selected_creature.thinking.model_override == item.value %} selected{% endif %}>{{ item.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            Effort
+            <select name="reasoning_effort_override" data-creature-sheet-autosave-on="change">
+              <option value=""{% if selected_creature.thinking.uses_global_reasoning_effort %} selected{% endif %}>Use general setting ({{ selected_creature.thinking.global_reasoning_effort_label }})</option>
+              {% for item in selected_creature.thinking.choices %}
+                <option value="{{ item.value }}"{% if not selected_creature.thinking.uses_global_reasoning_effort and selected_creature.thinking.reasoning_effort_override == item.value %} selected{% endif %}>{{ item.label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <div class="creature-detail-meta">
+            <span>Current <strong>{{ selected_creature.thinking.model }}</strong></span>
+            <span>Effort <strong>{{ selected_creature.thinking.reasoning_effort_label }}</strong></span>
+          </div>
+          <p class="creature-sheet-hint">Changes save automatically. Leave the model blank or keep effort on the general setting to inherit the ecosystem defaults.</p>
+          <div class="creature-sheet-actions">
+            <button type="button" class="creature-action-btn creature-action-btn-secondary" data-creature-sheet-close>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div class="creature-sheet-modal" data-creature-sheet-modal="owner-reference" hidden>
+      <div class="creature-sheet-backdrop" data-creature-sheet-close aria-hidden="true"></div>
+      <div class="creature-sheet-card" role="dialog" aria-modal="true" aria-labelledby="ownerReferenceTitle">
+        <div class="creature-sheet-kicker">Creature action</div>
+        <h2 id="ownerReferenceTitle">Customize what it calls you</h2>
+        <form method="post" action="/creatures/{{ selected_creature.slug }}/owner-reference" class="creature-inline-form creature-sheet-form">
+          <input type="hidden" name="view" value="creature">
+          <label>
+            This creature calls you
+            <select name="owner_reference_choice" data-owner-reference-select data-creature-sheet-autofocus>
+              <option value="__inherit__"{% if selected_owner_reference_state.inherits_global %} selected{% endif %}>Use ecosystem setting</option>
+              {% for item in selected_owner_reference_state.choices %}
+                <option value="{{ item.value }}"{% if not selected_owner_reference_state.inherits_global and selected_owner_reference_state.selected == item.value %} selected{% endif %}>{{ item.label }}</option>
+              {% endfor %}
+              <option value="__custom__"{% if not selected_owner_reference_state.inherits_global and selected_owner_reference_state.selected == '__custom__' %} selected{% endif %}>Custom</option>
+            </select>
+          </label>
+          <label data-owner-reference-custom-wrap{% if selected_owner_reference_state.inherits_global or selected_owner_reference_state.selected != '__custom__' %} hidden{% endif %}>
+            Custom label
+            <input type="text" name="owner_reference_custom" value="{{ selected_owner_reference_state.custom }}" placeholder="Try your first name">
+          </label>
+          <div class="creature-detail-meta">
+            <span>Current <strong>{{ selected_owner_reference_state.current }}</strong></span>
+            <span>Source <strong>{% if selected_owner_reference_state.inherits_global %}ecosystem setting{% else %}creature override{% endif %}</strong></span>
+          </div>
+          <div class="creature-sheet-actions">
+            <button type="button" class="creature-action-btn creature-action-btn-secondary" data-creature-sheet-close>Cancel</button>
+            <button type="submit" class="creature-action-btn creature-action-btn-secondary">Save label</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  {% endif %}
+  <div class="creature-confirm-modal" data-confirm-modal hidden>
+    <div class="creature-confirm-backdrop" data-confirm-backdrop aria-hidden="true"></div>
+    <div
+      class="creature-confirm-card"
+      data-confirm-card
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="creatureConfirmTitle"
+      aria-describedby="creatureConfirmBody"
+      tabindex="-1"
+    >
+      <div class="creature-confirm-kicker" data-confirm-kicker>Confirm action</div>
+      <h2 id="creatureConfirmTitle" data-confirm-title>Are you sure?</h2>
+      <p id="creatureConfirmBody" data-confirm-body></p>
+      <div class="creature-confirm-actions">
+        <button type="button" class="creature-action-btn creature-action-btn-secondary" data-confirm-cancel>Cancel</button>
+        <button type="button" class="creature-action-btn creature-action-btn-danger" data-confirm-accept>Continue</button>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  <script src="/static/creature_os.js?v={{ static_version }}"></script>
+{% endblock %}

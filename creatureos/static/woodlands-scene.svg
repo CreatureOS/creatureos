@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" fill="none">
+  <defs>
+    <linearGradient id="sky" x1="800" y1="0" x2="800" y2="1000" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1A2617"/>
+      <stop offset="0.46" stop-color="#10170F"/>
+      <stop offset="1" stop-color="#090C08"/>
+    </linearGradient>
+    <radialGradient id="moonGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1238 182) rotate(90) scale(194 194)">
+      <stop offset="0" stop-color="#F4ECC2" stop-opacity="0.24"/>
+      <stop offset="0.22" stop-color="#F4ECC2" stop-opacity="0.11"/>
+      <stop offset="0.58" stop-color="#D9E2B4" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#D9E2B4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="clearingGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(866 706) rotate(90) scale(182 560)">
+      <stop offset="0" stop-color="#B9C78A" stop-opacity="0.16"/>
+      <stop offset="0.38" stop-color="#A1B373" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#A1B373" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="mist" x1="800" y1="510" x2="800" y2="858" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D9DFB5" stop-opacity="0.05"/>
+      <stop offset="0.46" stop-color="#C5CF9D" stop-opacity="0.022"/>
+      <stop offset="1" stop-color="#1A2316" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="leftShade" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(0 500) scale(320 760)">
+      <stop offset="0" stop-color="#050705" stop-opacity="0.46"/>
+      <stop offset="1" stop-color="#050705" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="rightShade" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1600 500) scale(340 760)">
+      <stop offset="0" stop-color="#050705" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#050705" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1600" height="1000" fill="url(#sky)"/>
+  <circle cx="1238" cy="182" r="42" fill="#F4ECC2" fill-opacity="0.05"/>
+  <circle cx="1238" cy="182" r="106" fill="url(#moonGlow)"/>
+  <ellipse cx="866" cy="706" rx="560" ry="182" fill="url(#clearingGlow)"/>
+  <rect width="1600" height="1000" fill="url(#mist)"/>
+  <rect width="1600" height="1000" fill="url(#leftShade)"/>
+  <rect width="1600" height="1000" fill="url(#rightShade)"/>
+
+  <g fill="#22301E" fill-opacity="0.54">
+    <path d="M0 618c126-20 206-16 330 14 102 24 166 34 262 22 90-10 144-32 238-32 98 0 160 24 256 30 100 6 164-12 262-12 90 0 154 14 252 42v110H0Z"/>
+  </g>
+  <g fill="#2C4026" fill-opacity="0.3">
+    <path d="M0 698c112-20 186-16 292 8 94 20 154 28 248 18 86-8 140-26 226-26 90 0 148 16 234 22 94 6 156-8 250-8 84 0 146 12 242 34l108 24v78H0Z"/>
+  </g>
+  <g fill="#AEBF80" fill-opacity="0.12">
+    <ellipse cx="438" cy="742" rx="98" ry="38"/>
+    <ellipse cx="850" cy="726" rx="156" ry="44"/>
+    <ellipse cx="1310" cy="742" rx="108" ry="36"/>
+  </g>
+
+  <g fill="#0F160D" fill-opacity="0.94">
+    <path d="M0 832c96-18 156-18 252 2 88 18 142 22 228 12 80-10 130-28 212-28 82 0 134 20 214 30 88 10 144 8 232-6 86-14 142-14 228 4 86 18 144 20 234 8v148H0Z"/>
+  </g>
+  <g fill="#172016" fill-opacity="0.92">
+    <path d="M0 892c72-8 116-8 188 0 68 8 112 10 180 4 76-8 124-20 200-20s126 16 202 24c78 8 126 8 204-2 80-10 130-10 210 4 76 14 124 16 202 6l214-30v122H0Z"/>
+  </g>
+</svg>

@@ -1,0 +1,88 @@
+{% set _page_title = page_title or "CreatureOS" %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>{{ _page_title }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@700;800&display=swap" rel="stylesheet">
+  <link rel="icon" href="/static/favicon.ico?v={{ static_version }}" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png?v={{ static_version }}">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png?v={{ static_version }}">
+  <link rel="icon" type="image/png" sizes="64x64" href="/static/creatureos-favicon.png?v={{ static_version }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png?v={{ static_version }}">
+  <link rel="manifest" href="/static/site.webmanifest?v={{ static_version }}">
+  {% set ecosystem_color = settings_state.ecosystem.color if settings_state is defined and settings_state.ecosystem is defined else '#05060a' %}
+  <meta name="theme-color" content="{{ ecosystem_color }}">
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="/static/console.css?v={{ static_version }}">
+  {% block head_extra %}{% endblock %}
+</head>
+
+<body class="ads-settings-page{% if body_class %} {{ body_class }}{% endif %}" data-sidebar-collapsed="false"{% block body_attrs %}{% endblock %}>
+  <div class="shell"{% block shell_attrs %}{% endblock %}>
+    <main class="page">
+      <section class="panel panel-sidebar">
+        <div class="panel-header">
+          <div class="sidebar-header">
+            {% set _sidebar_title = sidebar_title or "CreatureOS" %}
+            <div class="sidebar-brand">
+              <img src="/static/creatureos-mark.png" alt="" aria-hidden="true" class="sidebar-logo creatureos-brand-mark" />
+              <span class="creatureos-brand-name">{{ _sidebar_title }}</span>
+            </div>
+            <div class="sidebar-header-controls">
+              {% block sidebar_header_controls %}{% endblock %}
+              <button class="sidebar-toggle" type="button" id="sidebarToggle" aria-label="Close sidebar" aria-expanded="true" data-tooltip="Close sidebar">
+                <span class="sidebar-toggle-bars" aria-hidden="true"></span>
+                <svg class="sidebar-toggle-arrows" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" focusable="false">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 9l-3 3 3 3"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9l3 3-3 3"/>
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12h18"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          {% block sidebar_header_extra %}{% endblock %}
+        </div>
+        <div class="panel-body">
+          {% block sidebar_nav %}{% endblock %}
+          <div class="sidebar-footer">
+            <div class="sidebar-footer-divider" aria-hidden="true"></div>
+            {% block sidebar_footer %}{% endblock %}
+          </div>
+        </div>
+      </section>
+
+      <section class="panel panel-main">
+        {% block main %}{% endblock %}
+      </section>
+    </main>
+  </div>
+
+  <button class="sidebar-toggle sidebar-floating-toggle" type="button" id="sidebarFloatingToggle" aria-label="Open sidebar" aria-expanded="false" data-tooltip="Open sidebar">
+    <span class="sidebar-toggle-bars" aria-hidden="true"></span>
+    <svg class="sidebar-toggle-arrows" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" focusable="false">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 9l-3 3 3 3"/>
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9l3 3-3 3"/>
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12h18"/>
+    </svg>
+  </button>
+
+  <div class="sidebar-floating-brand sidebar-brand-title" aria-hidden="true">{{ _page_title }}</div>
+
+  <button class="sidebar-toggle sidebar-floating-login" type="button" id="sidebarFloatingLogin" aria-label="Sign in" data-tooltip="Sign in">
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" focusable="false">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 17l5-5-5-5"/>
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 12h11"/>
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 7V5a2 2 0 012-2h2"/>
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17v2a2 2 0 002 2h2"/>
+    </svg>
+  </button>
+
+  {% block modals %}{% endblock %}
+  {% block scripts %}
+    <script src="/static/shell.js?v={{ static_version }}"></script>
+  {% endblock %}
+</body>
+</html>

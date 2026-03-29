@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <linearGradient id="water" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#061f39"/>
+      <stop offset="28%" stop-color="#08324e"/>
+      <stop offset="58%" stop-color="#09283c"/>
+      <stop offset="100%" stop-color="#050d15"/>
+    </linearGradient>
+    <radialGradient id="lightA" cx="24%" cy="16%" r="28%">
+      <stop offset="0%" stop-color="#95fff3" stop-opacity="0.22"/>
+      <stop offset="42%" stop-color="#95fff3" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#95fff3" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="lightB" cx="74%" cy="20%" r="24%">
+      <stop offset="0%" stop-color="#6bd9ff" stop-opacity="0.18"/>
+      <stop offset="48%" stop-color="#6bd9ff" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#6bd9ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e8fffb" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#e8fffb" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="seafloorA" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6f563a"/>
+      <stop offset="48%" stop-color="#574326"/>
+      <stop offset="100%" stop-color="#392917"/>
+    </linearGradient>
+    <linearGradient id="seafloorB" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#ab8c58"/>
+      <stop offset="52%" stop-color="#845f33"/>
+      <stop offset="100%" stop-color="#53391d"/>
+    </linearGradient>
+    <radialGradient id="sandGlow" cx="50%" cy="88%" r="44%">
+      <stop offset="0%" stop-color="#e2c68d" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="#e2c68d" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#water)"/>
+  <rect width="1600" height="900" fill="url(#lightA)"/>
+  <rect width="1600" height="900" fill="url(#lightB)"/>
+
+  <g opacity="0.12">
+    <ellipse cx="210" cy="92" rx="220" ry="42" fill="#d4fff7"/>
+    <ellipse cx="612" cy="76" rx="250" ry="36" fill="#a4fff5"/>
+    <ellipse cx="1086" cy="94" rx="230" ry="34" fill="#e7fffb"/>
+    <ellipse cx="1420" cy="82" rx="188" ry="30" fill="#8af7ff"/>
+  </g>
+
+  <g opacity="0.14">
+    <path d="M134 0h86l-152 660h-92Z" fill="url(#beam)"/>
+    <path d="M506 0h84L430 660h-92Z" fill="url(#beam)"/>
+    <path d="M938 0h92L888 660h-94Z" fill="url(#beam)"/>
+    <path d="M1284 0h78L1246 660h-88Z" fill="url(#beam)"/>
+  </g>
+
+  <g fill="#d6fffb" opacity="0.14">
+    <circle cx="188" cy="136" r="1.4"/>
+    <circle cx="302" cy="188" r="1.8"/>
+    <circle cx="418" cy="128" r="1.3"/>
+    <circle cx="612" cy="168" r="1.5"/>
+    <circle cx="748" cy="120" r="1.4"/>
+    <circle cx="926" cy="176" r="1.7"/>
+    <circle cx="1104" cy="132" r="1.3"/>
+    <circle cx="1264" cy="174" r="1.6"/>
+    <circle cx="1396" cy="144" r="1.4"/>
+  </g>
+
+  <g fill="#8cf7ef" opacity="0.06">
+    <ellipse cx="244" cy="282" rx="64" ry="18"/>
+    <ellipse cx="714" cy="336" rx="82" ry="20"/>
+    <ellipse cx="1122" cy="294" rx="96" ry="22"/>
+    <ellipse cx="1368" cy="358" rx="66" ry="18"/>
+  </g>
+
+  <path d="M0 620c124-18 224-6 360 28 126 32 228 36 388 10 150-24 266-26 412 8 134 32 246 38 440-2v236H0Z" fill="url(#seafloorA)" opacity="0.94"/>
+  <path d="M0 716c152 12 280 28 426 16 144-12 268-40 408-40 152 0 282 28 426 38 138 10 252 4 340-14v184H0Z" fill="url(#seafloorB)"/>
+  <path d="M0 786c138 18 276 24 420 2 158-24 282-66 450-52 176 14 290 68 470 70 112 2 212-16 260-28v122H0Z" fill="url(#sandGlow)" opacity="0.36"/>
+
+  <g stroke="#f1dca9" stroke-opacity="0.1" stroke-width="4" fill="none" stroke-linecap="round">
+    <path d="M104 770c108-14 204-16 304-4 112 13 204 16 322 6 94-8 188-24 300-18 108 6 200 28 308 24"/>
+    <path d="M146 808c86-10 164-10 244-2 98 10 182 10 276 2 88-8 166-22 258-18 84 4 166 18 244 14"/>
+    <path d="M198 844c68-8 128-8 190-2 74 8 136 8 208 2 68-5 132-16 204-14 60 3 122 12 188 10"/>
+  </g>
+
+  <g fill="#f0ddb4" opacity="0.1">
+    <ellipse cx="278" cy="766" rx="168" ry="42"/>
+    <ellipse cx="812" cy="796" rx="236" ry="54"/>
+    <ellipse cx="1262" cy="752" rx="176" ry="44"/>
+    <ellipse cx="1100" cy="836" rx="92" ry="18"/>
+    <ellipse cx="518" cy="836" rx="84" ry="16"/>
+  </g>
+
+  <g fill="#d6c093" opacity="0.08">
+    <ellipse cx="356" cy="742" rx="186" ry="52"/>
+    <ellipse cx="882" cy="776" rx="242" ry="56"/>
+    <ellipse cx="1298" cy="738" rx="164" ry="44"/>
+  </g>
+</svg>
