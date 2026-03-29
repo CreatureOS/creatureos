@@ -17,6 +17,7 @@ This repo is a local-first runtime for persistent Codex creatures. Treat this fi
 - Each creature has one persistent background thread for habit runs, introductions, and reflective follow-up.
 - Each chat gets its own Codex thread.
 - Durable state lives in SQLite-backed records plus one authored purpose surface. Do not add alternate shadow state unless there is a strong reason.
+- `creatureos serve` is the normal startup path. It should create the data dir if needed, initialize SQLite if needed, prepare first-run runtime state, and then start the web app. Do not drift back toward a separate required setup step for normal users.
 - Current durable surfaces:
   - `Purpose`: authored identity and commitments
   - `memory`: structured memory records rendered as a view, including human instructions/preferences, learned routines, and lighter contextual notes
@@ -84,11 +85,19 @@ Keeper-specific behavior:
 
 ## Verification
 
-There is not a large formal test suite yet. For meaningful changes, at minimum run:
+There is a real pytest suite now. For meaningful changes, prefer running:
 
 ```bash
+python3 -m pytest
 python3 -m py_compile creatureos/service.py creatureos/web.py creatureos/storage.py creatureos/cli.py creatureos/config.py creatureos/codex_cli.py
 node --check creatureos/static/creature_os.js
+```
+
+If you are touching packaging or the storage layer, also consider:
+
+```bash
+python3 scripts/check_storage_sql.py
+python3 scripts/storage_smoke.py
 ```
 
 Health check:
@@ -97,7 +106,13 @@ Health check:
 curl http://127.0.0.1:404/healthz
 ```
 
-If you need a browser-level check in this environment, use Playwright via Node with Chromium sandboxing disabled, for example:
+If you need a browser-level check in this environment, prefer:
+
+```bash
+CREATURE_OS_RUN_BROWSER_SMOKE=1 python3 -m pytest -m browser
+```
+
+If that path is unavailable and you need a raw fallback, use Playwright via Node with Chromium sandboxing disabled, for example:
 
 ```bash
 node - <<'NODE'
@@ -124,7 +139,9 @@ NODE
 - Templates live in `creatureos/templates/`
 - Frontend assets live in `creatureos/static/`
 - Health endpoint is `/healthz`
-- Local default URL is `http://localhost:404`
+- Local default URL is `http://127.0.0.1:404`
+- Contributor workflow, packaging notes, and release details live in `CONTRIBUTING.md`
+- Public package publishing is handled through GitHub Actions trusted publishing to TestPyPI and PyPI
 
 ## When in doubt
 
