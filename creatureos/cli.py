@@ -12,7 +12,15 @@ import time
 from datetime import datetime, timezone
 from urllib import request as urlrequest
 
-import fcntl
+try:
+    import fcntl  # type: ignore[attr-defined]
+except ImportError:  # pragma: no cover - exercised on Windows
+    fcntl = None
+
+try:
+    import msvcrt  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - exercised on non-Windows
+    msvcrt = None
 
 import uvicorn
 
@@ -238,6 +246,32 @@ def _create_listening_socket(host: str) -> socket.socket:
     return sock
 
 
+def _acquire_supervisor_lock(lock_file) -> None:
+    if fcntl is not None:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return
+    if msvcrt is None:  # pragma: no cover - defensive fallback
+        raise OSError("No supported file locking backend available")
+    lock_file.seek(0)
+    existing = lock_file.read(1)
+    if not existing:
+        lock_file.seek(0)
+        lock_file.write("1")
+        lock_file.flush()
+    lock_file.seek(0)
+    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+
+
+def _release_supervisor_lock(lock_file) -> None:
+    if fcntl is not None:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        return
+    if msvcrt is None:  # pragma: no cover - defensive fallback
+        return
+    lock_file.seek(0)
+    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+
+
 def _server_health_url() -> str:
     return f"http://127.0.0.1:{config.port()}/healthz"
 
@@ -386,7 +420,7 @@ def _run_server_supervisor(*, force_scan: bool = False, bind_mode: str = SERVE_B
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_file = lock_path.open("a+", encoding="utf-8")
     try:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _acquire_supervisor_lock(lock_file)
     except OSError:
         existing_pid = ""
         if pid_path.exists():
@@ -535,7 +569,7 @@ def _run_server_supervisor(*, force_scan: bool = False, bind_mode: str = SERVE_B
         except Exception:
             pass
         try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            _release_supervisor_lock(lock_file)
         except Exception:
             pass
         try:
