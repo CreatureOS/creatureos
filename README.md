@@ -45,7 +45,7 @@ You do not need to run a separate database setup step first.
 
 ## What You Need
 
-- Python `3.12+`
+- Python `3.10+`
 - the `codex` CLI on your `PATH`
 - Codex authenticated locally
 
