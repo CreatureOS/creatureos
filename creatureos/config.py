@@ -203,7 +203,19 @@ def port() -> int:
 
 
 def codex_bin() -> str:
-    return _env("CREATURE_OS_CODEX_BIN", "CODEX_BIN") or "codex"
+    override = _env("CREATURE_OS_CODEX_BIN", "CODEX_BIN")
+    if override:
+        return override
+    if os.name == "nt":
+        appdata = _env("APPDATA")
+        candidates = []
+        if appdata:
+            candidates.append(Path(appdata) / "npm" / "codex.cmd")
+        candidates.append(Path.home() / "AppData" / "Roaming" / "npm" / "codex.cmd")
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate)
+    return "codex"
 
 
 def creature_model() -> str:
@@ -229,7 +241,12 @@ def creature_timeout_seconds(sandbox_mode: str = "read-only") -> int | None:
 
 
 def python_bin() -> str:
-    return _env("CREATURE_OS_PYTHON_BIN", "PYTHON_BIN") or "python3"
+    override = _env("CREATURE_OS_PYTHON_BIN", "PYTHON_BIN")
+    if override:
+        return override
+    if sys.executable:
+        return sys.executable
+    return "python" if os.name == "nt" else "python3"
 
 
 def app_url() -> str:

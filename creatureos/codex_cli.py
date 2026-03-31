@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-import selectors
+import queue
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -73,6 +74,11 @@ def _handle_event_line(
         state["final_text"] = str(item.get("text") or "")
 
 
+def _sanitize_prompt_text(prompt: str) -> str:
+    normalized = str(prompt or "").replace("\r\n", "\n").replace("\r", "\n")
+    return "".join(char for char in normalized if char in {"\n", "\t"} or (ord(char) >= 32 and char != "\x7f"))
+
+
 def _invoke(
     command: list[str],
     *,
@@ -81,26 +87,56 @@ def _invoke(
     timeout_seconds: int | None = None,
     on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> CodexRunResult:
-    process = subprocess.Popen(
-        command + [prompt],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=workdir,
-        bufsize=1,
-    )
+    prompt_bytes = _sanitize_prompt_text(prompt).encode("utf-8")
+    try:
+        process = subprocess.Popen(
+            command + ["-"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            cwd=workdir,
+            bufsize=0,
+        )
+    except OSError as exc:
+        executable = str(command[0] if command else config.codex_bin()).strip() or config.codex_bin()
+        raise CodexCommandError(f"Failed to launch Codex command '{executable}': {exc}") from exc
+    if process.stdin is None:
+        process.kill()
+        process.wait()
+        raise CodexCommandError("Codex process did not expose a stdin pipe.")
     if process.stdout is None:
         process.kill()
         process.wait()
         raise CodexCommandError("Codex process did not expose a stdout pipe.")
 
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ)
     thread_id: str | None = None
     final_text = ""
     stdout_lines: list[str] = []
     state: dict[str, str | None] = {"thread_id": None, "final_text": None}
     started_at = time.monotonic()
+    stdout_queue: queue.Queue[bytes | None] = queue.Queue()
+
+    def _drain_stdout() -> None:
+        try:
+            for line in process.stdout:
+                stdout_queue.put(line)
+        finally:
+            stdout_queue.put(None)
+
+    def _feed_stdin() -> None:
+        try:
+            process.stdin.write(prompt_bytes)
+            process.stdin.flush()
+        finally:
+            try:
+                process.stdin.close()
+            except Exception:
+                pass
+
+    stdin_thread = threading.Thread(target=_feed_stdin, daemon=True)
+    stdin_thread.start()
+    stdout_thread = threading.Thread(target=_drain_stdout, daemon=True)
+    stdout_thread.start()
     try:
         while True:
             remaining: float | None = None
@@ -117,33 +153,36 @@ def _invoke(
                     else:
                         duration = f"{minutes} minutes"
                     raise CodexTimeoutError(f"Codex run timed out after {duration}.")
-            ready = selector.select(timeout=remaining if remaining is not None else 0.5)
-            if not ready:
+
+            wait_timeout = 0.5 if remaining is None else max(0.0, min(0.5, remaining))
+            try:
+                line = stdout_queue.get(timeout=wait_timeout)
+            except queue.Empty:
                 if process.poll() is not None:
                     break
                 continue
-            for key, _ in ready:
-                line = key.fileobj.readline()
-                if not line:
-                    selector.unregister(key.fileobj)
-                    continue
-                _handle_event_line(
-                    line,
-                    stdout_lines=stdout_lines,
-                    on_event=on_event,
-                    state=state,
-                )
-            if process.poll() is not None and not selector.get_map():
+
+            if line is None:
+                if process.poll() is not None:
+                    break
+                continue
+
+            decoded_line = line.decode("utf-8", errors="replace")
+            _handle_event_line(
+                decoded_line,
+                stdout_lines=stdout_lines,
+                on_event=on_event,
+                state=state,
+            )
+            if process.poll() is not None and stdout_queue.empty() and not stdout_thread.is_alive():
                 break
     finally:
-        try:
-            selector.close()
-        except Exception:
-            pass
+        stdin_thread.join(timeout=1)
         try:
             process.stdout.close()
         except Exception:
             pass
+        stdout_thread.join(timeout=1)
 
     returncode = process.wait()
     stderr_text = "\n".join(line for line in stdout_lines if line.startswith("ERROR"))

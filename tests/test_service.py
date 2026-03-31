@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timedelta, timezone
 
 from creatureos import service
@@ -126,6 +127,55 @@ def test_summoning_name_prompt_includes_ecosystem_world_description(runtime_env)
     assert "Creatures from here should feel tidal, brined, drifting" in prompt
 
 
+def test_preview_summoning_name_rejects_title_like_generated_candidates(runtime_env, monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "_codex_summoning_name_candidates",
+        lambda **kwargs: [
+            "Set Of Repos: Current Intent",
+            "Mosswake",
+            "Queue Status Tracker",
+            "Harbor Bell",
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "_codex_select_summoning_name",
+        lambda **kwargs: {
+            "display_name": "Set Of Repos: Current Intent",
+            "alternates": ["Queue Status Tracker", "Harbor Bell"],
+        },
+    )
+
+    preview = service.preview_summoning_names(
+        brief="A first creature that looks across active software work, keeps repo state coherent, and notices drift early.",
+        ecosystem="woodlands",
+        purpose_summary="Looks across active software work, keeps repo state coherent, and notices drift early.",
+    )
+
+    assert preview["proposed_name"] == "Mosswake"
+    assert preview["candidates"] == ["Mosswake", "Harbor Bell"]
+    assert preview["alternates"] == ["Harbor Bell"]
+
+
+def test_extract_explicit_creature_name_rejects_title_like_phrase():
+    assert service._extract_explicit_creature_name("Call it Set Of Repos: Current Intent.") is None
+
+
+def test_summoning_name_fallback_skips_operational_brief_keywords(runtime_env, monkeypatch):
+    monkeypatch.setattr(service, "_codex_summoning_name_candidates", lambda **kwargs: [])
+    monkeypatch.setattr(service, "_codex_select_summoning_name", lambda **kwargs: None)
+
+    preview = service.preview_summoning_names(
+        brief="Summon a creature for repo project state intent coordination workflows tasks.",
+        ecosystem="woodlands",
+        purpose_summary="Keeps repo project state and workflow intent aligned.",
+    )
+
+    assert preview["proposed_name"] == "Woodlands Echo"
+    assert preview["alternates"] == []
+
+
 def test_system_scan_roots_follow_likely_machine_work_dirs_not_workspace(runtime_env, tmp_path):
     home = tmp_path / "home"
     home.mkdir()
@@ -245,3 +295,142 @@ def test_activity_view_shows_selected_habit_log_oldest_first(create_test_creatur
         "First ponder summary",
         "Second ponder summary",
     ]
+
+
+def test_classify_codex_launch_failure_as_local_issue():
+    issue = service._classify_codex_access_issue(
+        service.CodexCommandError("Failed to launch Codex command 'codex': [WinError 5] Access is denied")
+    )
+
+    assert issue == {
+        "kind": "local",
+        "detail": "Failed to launch Codex command 'codex': [WinError 5] Access is denied",
+    }
+
+
+def test_local_codex_waiting_message_tells_user_to_install_or_configure_cli():
+    message = service._codex_waiting_message(kind="local")
+
+    assert "Install the Codex CLI" in message
+    assert "`codex` command works in a terminal" in message
+    assert "`CREATURE_OS_CODEX_BIN`" in message
+
+
+def test_keeper_dialog_mentions_failed_first_creature(runtime_env, create_test_creature):
+    service.confirm_onboarding_ecosystem(ecosystem_choice="woodlands")
+    keeper = storage.get_creature_by_slug(service.KEEPER_SLUG)
+    assert keeper is not None
+    failed_creature = create_test_creature(display_name="Mosswake", concern="Keep the work coherent.")
+    failed_run = storage.create_run(
+        int(failed_creature["id"]),
+        trigger_type="bootstrap",
+        prompt_text="Wake up.",
+        thread_id=None,
+        conversation_id=None,
+        run_scope=service.RUN_SCOPE_ACTIVITY,
+        sandbox_mode="read-only",
+    )
+    storage.finish_run(
+        int(failed_run["id"]),
+        creature_id=int(failed_creature["id"]),
+        status="failed",
+        raw_output_text=None,
+        summary=None,
+        severity="critical",
+        message_text=None,
+        error_text="Failed to launch Codex command 'codex': [WinError 5] Access is denied",
+        next_run_at=None,
+        metadata={"run_scope": service.RUN_SCOPE_ACTIVITY},
+        notes_markdown=None,
+        notes_path=None,
+    )
+
+    creatures = [dict(row) for row in storage.list_creatures()]
+    for creature in creatures:
+        creature.update(service._creature_intro_state(creature))
+
+    dialog = service._keeper_dialog_state(
+        keeper,
+        creatures=creatures,
+        conversation=None,
+        messages=[],
+        onboarding_required=False,
+        transition_notice="starter-creatures-creating",
+    )
+
+    assert "Mosswake" in dialog["body"]
+    assert "failed to wake cleanly" in dialog["body"]
+    assert "Access is denied" in dialog["body"]
+
+
+def test_restart_onboarding_interrupts_active_keeper_run(runtime_env):
+    service.confirm_onboarding_ecosystem(ecosystem_choice="woodlands")
+    keeper = storage.get_creature_by_slug(service.KEEPER_SLUG)
+    assert keeper is not None
+    conversation = storage.find_conversation_by_title(int(keeper["id"]), service.KEEPER_CONVERSATION_TITLE)
+    assert conversation is not None
+
+    run = storage.create_run(
+        int(keeper["id"]),
+        trigger_type="keeper_chat",
+        prompt_text="Tell me what I am to do.",
+        thread_id="thread_123",
+        conversation_id=int(conversation["id"]),
+        run_scope=service.RUN_SCOPE_CHAT,
+        sandbox_mode="read-only",
+    )
+    service._remember_active_run_thread(int(run["id"]), threading.current_thread())
+
+    state = service.restart_onboarding()
+    interrupted = storage.get_run(int(run["id"]))
+
+    assert state["phase"] == service.DEFAULT_ONBOARDING_PHASE
+    assert interrupted is not None
+    assert str(interrupted["status"]) == "failed"
+    assert str(interrupted["error_text"]) == service.ONBOARDING_RESTART_RUN_ERROR_TEXT
+    assert storage.latest_running_run_for_creature(int(keeper["id"])) is None
+    assert storage.get_conversation(int(conversation["id"])) is None
+    assert int(run["id"]) not in service._ACTIVE_RUN_THREADS
+
+
+def test_delete_conversation_interrupts_active_run(create_test_creature):
+    creature = create_test_creature(display_name="Morrow", concern="Keep the chat flowing.")
+    creature_id = int(creature["id"])
+    conversation = storage.create_conversation(creature_id, title="Current chat")
+    fallback = storage.create_conversation(creature_id, title="Older chat")
+    run = storage.create_run(
+        creature_id,
+        trigger_type="user_reply",
+        prompt_text="Reply to the owner.",
+        thread_id="thread_456",
+        conversation_id=int(conversation["id"]),
+        run_scope=service.RUN_SCOPE_CHAT,
+        sandbox_mode="read-only",
+    )
+
+    result = service.delete_conversation(
+        str(creature["slug"]),
+        int(conversation["id"]),
+        current_conversation_id=int(fallback["id"]),
+    )
+    interrupted = storage.get_run(int(run["id"]))
+
+    assert result == {
+        "deleted_conversation_id": int(conversation["id"]),
+        "redirect_conversation_id": int(fallback["id"]),
+    }
+    assert interrupted is not None
+    assert str(interrupted["status"]) == "failed"
+    assert str(interrupted["error_text"]) == service.CONVERSATION_RESET_RUN_ERROR_TEXT
+    assert storage.latest_running_run_for_creature(creature_id) is None
+
+
+def test_reset_ecosystem_removes_creatures_and_resets_onboarding(create_test_creature):
+    create_test_creature(display_name="Lumen", concern="Keep me steady.")
+    service.confirm_onboarding_ecosystem(ecosystem_choice="sea")
+
+    service.reset_ecosystem()
+
+    assert storage.list_creatures() == []
+    assert service.get_onboarding_phase() == service.DEFAULT_ONBOARDING_PHASE
+    assert service.get_ecosystem()["value"] == service.DEFAULT_ECOSYSTEM

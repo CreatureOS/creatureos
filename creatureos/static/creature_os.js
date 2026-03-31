@@ -72,6 +72,106 @@
     return template.content.cloneNode(true);
   };
 
+  const chatViewportRoots = (target = null) => {
+    const roots = [];
+    const globalChat = document.getElementById("chat");
+    if (globalChat instanceof HTMLElement) {
+      roots.push(globalChat);
+    }
+    if (target instanceof HTMLElement) {
+      const localChatRoot = target.closest("#chat");
+      if (localChatRoot instanceof HTMLElement && !roots.includes(localChatRoot)) {
+        roots.push(localChatRoot);
+      }
+    }
+    return roots;
+  };
+
+  const isChatViewportNearBottom = (target = null, threshold = 64) => (
+    chatViewportRoots(target).some((root) => (root.scrollHeight - root.clientHeight - root.scrollTop) <= threshold)
+  );
+
+  const scrollChatViewportToBottom = (target = null) => {
+    chatViewportRoots(target).forEach((root) => {
+      root.scrollTop = root.scrollHeight;
+    });
+  };
+
+  const scheduleChatViewportAutoScroll = (target = null) => {
+    const run = () => scrollChatViewportToBottom(target);
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => {
+        run();
+        window.requestAnimationFrame(run);
+      });
+      return;
+    }
+    window.setTimeout(run, 0);
+  };
+
+  const pinChatViewportWhile = (predicate, target = null) => {
+    if (typeof predicate !== "function") {
+      return () => {};
+    }
+    const roots = chatViewportRoots(target);
+    if (!roots.length || !isChatViewportNearBottom(target)) {
+      return () => {};
+    }
+    let stopped = false;
+    let shouldFollow = true;
+    let suppressScroll = false;
+
+    const cleanup = () => {
+      if (stopped) return;
+      stopped = true;
+      roots.forEach((root) => {
+        root.removeEventListener("scroll", handleScroll);
+      });
+    };
+
+    function handleScroll(event) {
+      if (suppressScroll || stopped) return;
+      const root = event.currentTarget;
+      if (!(root instanceof HTMLElement)) return;
+      const distanceFromBottom = root.scrollHeight - root.clientHeight - root.scrollTop;
+      if (distanceFromBottom > 64) {
+        shouldFollow = false;
+        cleanup();
+      }
+    }
+
+    roots.forEach((root) => {
+      root.addEventListener("scroll", handleScroll, { passive: true });
+    });
+
+    const tick = () => {
+      if (stopped) return;
+      if (!predicate()) {
+        cleanup();
+        if (shouldFollow) {
+          scheduleChatViewportAutoScroll(target);
+        }
+        return;
+      }
+      suppressScroll = true;
+      scrollChatViewportToBottom(target);
+      suppressScroll = false;
+      if (typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(tick);
+      } else {
+        window.setTimeout(tick, 16);
+      }
+    };
+    tick();
+    return () => {
+      const allowFinalScroll = shouldFollow;
+      cleanup();
+      if (allowFinalScroll) {
+        scrollChatViewportToBottom(target);
+      }
+    };
+  };
+
   const renderMarkdownIntoTarget = (target) => {
     if (!(target instanceof HTMLElement)) return;
     const source = target.parentElement?.querySelector("[data-markdown-source]");
@@ -93,6 +193,9 @@
       target.innerHTML = renderSimpleMarkdown(markdown);
     }
     target.classList.remove("creature-markdown-content--pending");
+    if (isChatViewportNearBottom(target)) {
+      scheduleChatViewportAutoScroll(target);
+    }
   };
 
   document.querySelectorAll("[data-markdown-target]").forEach((target) => {
@@ -695,6 +798,8 @@
     });
   }, 320);
 
+  let startTypewriterOnNode = () => false;
+
   const initTypewriterText = () => {
     const collectRenderableTextNodes = (root) => {
       if (!(root instanceof HTMLElement)) return [];
@@ -790,7 +895,7 @@
       }
     };
 
-    const startTypewriterOnNode = (node, delayMs = 0) => {
+    startTypewriterOnNode = (node, delayMs = 0) => {
       if (!(node instanceof HTMLElement)) return;
       const fullText = String(node.dataset.typewriterText || node.textContent || "").trim();
       if (!fullText) return false;
@@ -807,10 +912,12 @@
       }
       const speed = Math.max(5, Number(node.dataset.typewriterSpeed || 8));
       node.classList.add("is-typing");
+      const stopPinning = pinChatViewportWhile(() => node.classList.contains("is-typing"), node);
 
       const finish = () => {
         finalizeTypewriterText(node, fullText);
         node.classList.remove("is-typing");
+        stopPinning();
         if (onceStorageKey) {
           try {
             window.localStorage.setItem(onceStorageKey, "done");
@@ -1606,9 +1713,8 @@
     };
 
     const scrollChatToBottom = () => {
-      if (chatEl) {
-        chatEl.scrollTop = chatEl.scrollHeight;
-      }
+      scrollChatViewportToBottom();
+      scheduleChatViewportAutoScroll();
     };
 
     const syncInputHeight = () => {
@@ -2188,8 +2294,26 @@
   initCreatureSheetModals(creatureHeaderMenuState);
 
   let sidebarAwakeningPollId = 0;
+  const awakeningTransitionNotices = new Set(["starter-creatures-creating", "creature-creating", "creatures-creating"]);
 
   const currentConversationUrl = () => `${window.location.pathname}${window.location.search}`;
+  const currentTransitionNotice = () => {
+    try {
+      return new URL(window.location.href).searchParams.get("notice") || "";
+    } catch {
+      return "";
+    }
+  };
+  const shouldRefreshResolvedAwakeningPage = () => awakeningTransitionNotices.has(currentTransitionNotice());
+  const resolvedAwakeningRedirectUrl = () => {
+    try {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete("notice");
+      return `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`;
+    } catch {
+      return currentConversationUrl();
+    }
+  };
 
   const refreshSidebarSections = async (url) => {
     const targetUrl = String(url || currentConversationUrl()).trim();
@@ -2240,6 +2364,9 @@
       }
       if (!hasAwakeningSidebarRows()) {
         stopSidebarAwakeningWatch();
+        if (shouldRefreshResolvedAwakeningPage()) {
+          window.location.replace(resolvedAwakeningRedirectUrl());
+        }
       }
     }, 1800);
   };
@@ -2485,9 +2612,8 @@
   });
 
   const scrollChatToBottom = () => {
-    if (chatEl) {
-      chatEl.scrollTop = chatEl.scrollHeight;
-    }
+    scrollChatViewportToBottom();
+    scheduleChatViewportAutoScroll();
   };
 
   let activeRunFeedSource = null;

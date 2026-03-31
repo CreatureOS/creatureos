@@ -200,22 +200,71 @@ def _remove_server_pid_if_owned(owner_pid: int) -> None:
         pid_path.unlink(missing_ok=True)
 
 
-def _terminate_worker(worker: subprocess.Popen[bytes] | None) -> None:
-    if worker is None or worker.poll() is not None:
+def _terminate_pid(pid: int | None) -> None:
+    target_pid = int(pid or 0)
+    if target_pid <= 0 or target_pid == os.getpid():
+        return
+    try:
+        os.kill(target_pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
+        return
+
+
+def _terminate_worker(
+    worker: subprocess.Popen[bytes] | None,
+    *,
+    runtime_pid: int | None = None,
+) -> None:
+    target_runtime_pid = int(runtime_pid or 0)
+    if worker is None:
+        _terminate_pid(target_runtime_pid)
+        return
+    if worker.poll() is not None:
+        if target_runtime_pid and target_runtime_pid != worker.pid:
+            _terminate_pid(target_runtime_pid)
         return
     try:
         worker.terminate()
         worker.wait(timeout=SERVER_SHUTDOWN_GRACE_SECONDS)
-        return
     except subprocess.TimeoutExpired:
-        pass
+        try:
+            worker.kill()
+            worker.wait(timeout=1)
+        except Exception:
+            pass
     except ProcessLookupError:
-        return
-    try:
-        worker.kill()
-        worker.wait(timeout=1)
-    except Exception:
-        return
+        pass
+    if target_runtime_pid and target_runtime_pid != worker.pid:
+        _terminate_pid(target_runtime_pid)
+
+
+def _runtime_cli_args() -> list[str]:
+    return [
+        "--workspace",
+        str(config.workspace_root()),
+        "--data-dir",
+        str(config.data_dir()),
+        "--db-path",
+        str(config.db_path()),
+    ]
+
+
+def _worker_command_args(*, bind_mode: str) -> list[str]:
+    args = [config.python_bin(), "-m", "creatureos.cli", *_runtime_cli_args(), "serve-worker"]
+    if _normalize_bind_mode(bind_mode) == SERVE_BIND_MODE_TAILSCALE:
+        args.append("--tailscale")
+    return args
+
+
+def _supervisor_command_args(*, bind_mode: str, include_force_scan: bool = False) -> list[str]:
+    args = [config.python_bin(), "-m", "creatureos.cli", *_runtime_cli_args(), "serve"]
+    if _normalize_bind_mode(bind_mode) == SERVE_BIND_MODE_TAILSCALE:
+        args.append("--tailscale")
+    if include_force_scan:
+        args.append("--force-scan")
+    return args
 
 
 def _launch_server_worker(source_revision: str, *, bind_mode: str) -> tuple[subprocess.Popen[bytes], str]:
@@ -226,11 +275,8 @@ def _launch_server_worker(source_revision: str, *, bind_mode: str) -> tuple[subp
     env["CREATURE_OS_SERVER_BOOTED_AT"] = booted_at
     env["CREATURE_OS_SUPERVISOR_PID"] = str(os.getpid())
     env[SERVE_BIND_MODE_ENV] = _normalize_bind_mode(bind_mode)
-    worker_args = [config.python_bin(), "-m", "creatureos.cli", "serve-worker"]
-    if _normalize_bind_mode(bind_mode) == SERVE_BIND_MODE_TAILSCALE:
-        worker_args.append("--tailscale")
     worker = subprocess.Popen(
-        worker_args,
+        _worker_command_args(bind_mode=bind_mode),
         cwd=str(config.package_root().parent),
         env=env,
     )
@@ -348,16 +394,17 @@ def _wait_for_worker_ready(
     source_revision: str,
     booted_at: str,
     timeout_seconds: float = SERVER_READY_TIMEOUT_SECONDS,
-) -> bool:
+) -> int | None:
     deadline = time.monotonic() + max(1.0, timeout_seconds)
     while time.monotonic() < deadline:
         if worker.poll() is not None:
-            return False
+            return None
         payload = _load_server_ready_payload()
-        if _server_ready_matches(payload, source_revision=source_revision, worker_pid=worker.pid, booted_at=booted_at):
-            return True
+        if _server_ready_matches(payload, source_revision=source_revision, booted_at=booted_at):
+            ready_pid = int((payload or {}).get("worker_pid") or 0)
+            return ready_pid or worker.pid
         time.sleep(SERVER_READY_POLL_INTERVAL_SECONDS)
-    return False
+    return None
 
 
 def _run_server_worker(*, force_scan: bool = False, bind_mode: str = SERVE_BIND_MODE_DEFAULT) -> int:
@@ -437,6 +484,7 @@ def _run_server_supervisor(*, force_scan: bool = False, bind_mode: str = SERVE_B
         return 1
 
     worker: subprocess.Popen[bytes] | None = None
+    worker_runtime_pid: int | None = None
     normalized_bind_mode = _normalize_bind_mode(bind_mode)
     os.environ[SERVE_BIND_MODE_ENV] = normalized_bind_mode
     current_revision = config.server_source_revision()
@@ -447,17 +495,9 @@ def _run_server_supervisor(*, force_scan: bool = False, bind_mode: str = SERVE_B
     consecutive_health_failures = 0
     launch_count = 0
 
-    def _supervisor_args(*, include_force_scan: bool = False) -> list[str]:
-        args = [config.python_bin(), "-m", "creatureos.cli", "serve"]
-        if normalized_bind_mode == SERVE_BIND_MODE_TAILSCALE:
-            args.append("--tailscale")
-        if include_force_scan:
-            args.append("--force-scan")
-        return args
-
     def _handle_shutdown(signum: int, frame) -> None:  # type: ignore[no-untyped-def]
         state["shutdown"] = True
-        _terminate_worker(worker)
+        _terminate_worker(worker, runtime_pid=worker_runtime_pid)
 
     def _handle_reload(signum: int, frame) -> None:  # type: ignore[no-untyped-def]
         state["reload"] = True
@@ -465,7 +505,7 @@ def _run_server_supervisor(*, force_scan: bool = False, bind_mode: str = SERVE_B
     def _reexec_supervisor(*, include_force_scan: bool = False) -> None:
         os.execvpe(
             config.python_bin(),
-            _supervisor_args(include_force_scan=include_force_scan),
+            _supervisor_command_args(bind_mode=normalized_bind_mode, include_force_scan=include_force_scan),
             os.environ.copy(),
         )
 
@@ -493,13 +533,13 @@ def _run_server_supervisor(*, force_scan: bool = False, bind_mode: str = SERVE_B
         _prepare_server_runtime(force_scan=launch_force_scan)
         while not state["shutdown"]:
             if state["reload"]:
-                _terminate_worker(worker)
+                _terminate_worker(worker, runtime_pid=worker_runtime_pid)
                 print("Reload requested; restarting supervisor.", flush=True)
                 _reexec_supervisor(include_force_scan=launch_force_scan)
 
             latest_revision = config.server_source_revision()
             if latest_revision != current_revision:
-                _terminate_worker(worker)
+                _terminate_worker(worker, runtime_pid=worker_runtime_pid)
                 print("Source revision changed; restarting supervisor.", flush=True)
                 _reexec_supervisor(include_force_scan=launch_force_scan)
 
@@ -507,11 +547,13 @@ def _run_server_supervisor(*, force_scan: bool = False, bind_mode: str = SERVE_B
                 if state["shutdown"]:
                     break
                 if worker is not None:
+                    _terminate_worker(worker, runtime_pid=worker_runtime_pid)
                     print(
                         f"Worker exited with code {worker.returncode}; restarting in {SERVER_RESTART_BACKOFF_SECONDS:.1f}s.",
                         flush=True,
                     )
                     time.sleep(SERVER_RESTART_BACKOFF_SECONDS)
+                worker_runtime_pid = None
                 current_revision = config.server_source_revision()
                 _remove_server_ready_file()
                 worker, worker_started_at = _launch_server_worker(current_revision, bind_mode=normalized_bind_mode)
@@ -520,20 +562,26 @@ def _run_server_supervisor(*, force_scan: bool = False, bind_mode: str = SERVE_B
                     f"Launching worker #{launch_count} ({normalized_bind_mode}) for revision {current_revision[:12]}.",
                     flush=True,
                 )
-                if not _wait_for_worker_ready(worker, source_revision=current_revision, booted_at=worker_started_at):
+                worker_runtime_pid = _wait_for_worker_ready(
+                    worker,
+                    source_revision=current_revision,
+                    booted_at=worker_started_at,
+                )
+                if not worker_runtime_pid:
                     print(
                         f"Worker #{launch_count} failed to become ready within {SERVER_READY_TIMEOUT_SECONDS:.0f}s.",
                         flush=True,
                     )
-                    _terminate_worker(worker)
+                    _terminate_worker(worker, runtime_pid=worker_runtime_pid)
                     worker = None
+                    worker_runtime_pid = None
                     continue
                 launch_force_scan = False
                 consecutive_health_failures = 0
                 last_health_probe_at = time.monotonic()
                 _write_server_pid(
                     supervisor_pid=os.getpid(),
-                    worker_pid=worker.pid,
+                    worker_pid=worker_runtime_pid,
                     source_revision=current_revision,
                     started_at=worker_started_at,
                     bind_mode=normalized_bind_mode,
@@ -544,7 +592,12 @@ def _run_server_supervisor(*, force_scan: bool = False, bind_mode: str = SERVE_B
             if now - last_health_probe_at >= SERVER_HEALTH_CHECK_INTERVAL_SECONDS:
                 last_health_probe_at = now
                 payload = _fetch_server_health()
-                if _server_health_matches(payload, source_revision=current_revision, worker_pid=worker.pid, booted_at=worker_started_at):
+                if _server_health_matches(
+                    payload,
+                    source_revision=current_revision,
+                    worker_pid=worker_runtime_pid,
+                    booted_at=worker_started_at,
+                ):
                     consecutive_health_failures = 0
                 else:
                     consecutive_health_failures += 1
@@ -554,15 +607,16 @@ def _run_server_supervisor(*, force_scan: bool = False, bind_mode: str = SERVE_B
                     )
                     if consecutive_health_failures >= SERVER_HEALTH_FAILURE_LIMIT:
                         print("Worker stayed unhealthy; restarting it.", flush=True)
-                        _terminate_worker(worker)
+                        _terminate_worker(worker, runtime_pid=worker_runtime_pid)
                         worker = None
+                        worker_runtime_pid = None
                         consecutive_health_failures = 0
                         continue
 
             time.sleep(SERVER_WATCH_INTERVAL_SECONDS)
         return 0
     finally:
-        _terminate_worker(worker)
+        _terminate_worker(worker, runtime_pid=worker_runtime_pid)
         _remove_server_ready_file()
         try:
             _remove_server_pid_if_owned(os.getpid())

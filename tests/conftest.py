@@ -20,6 +20,7 @@ def _reset_service_runtime_state() -> None:
     service._CODEX_RATE_LIMIT_CACHE_AT = None
     service._CODEX_MODEL_CHOICES_CACHE = None
     service._CODEX_MODEL_CHOICES_CACHE_AT = None
+    service._ACTIVE_RUN_THREADS.clear()
     service._RUN_FEED_ACTIVE_TURNS.clear()
 
 

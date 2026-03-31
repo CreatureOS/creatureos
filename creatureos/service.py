@@ -345,6 +345,9 @@ KEEPER_SLUG = "keeper"
 KEEPER_CONVERSATION_TITLE = "Keeper's desk"
 WELCOME_CONVERSATION_TITLE = "Welcome to CreatureOS"
 INTERRUPTED_RUN_ERROR_TEXT = "Run interrupted because the CreatureOS process restarted or lost its worker thread."
+CONVERSATION_RESET_RUN_ERROR_TEXT = "Run stopped because its conversation was reset before the reply finished."
+ONBOARDING_RESTART_RUN_ERROR_TEXT = "Run stopped because onboarding was restarted and the previous Keeper conversation was discarded."
+ECOSYSTEM_RESET_RUN_ERROR_TEXT = "Run stopped because the CreatureOS ecosystem was reset."
 _ACTIVE_RUN_THREADS: dict[int, threading.Thread] = {}
 _ACTIVE_RUN_THREADS_LOCK = threading.Lock()
 _CODEX_ACCESS_PROBE_LOCK = threading.Lock()
@@ -485,6 +488,71 @@ ROLE_NAME_LEAK_WORDS = {
     "service",
     "watcher",
     "writer",
+}
+GENERATED_NAME_OPERATIONAL_WORDS = {
+    "agenda",
+    "artifact",
+    "artifacts",
+    "backlog",
+    "brief",
+    "briefing",
+    "briefings",
+    "bug",
+    "bugs",
+    "context",
+    "contexts",
+    "coordination",
+    "deliverable",
+    "deliverables",
+    "doc",
+    "docs",
+    "goal",
+    "goals",
+    "intent",
+    "intents",
+    "issue",
+    "issues",
+    "milestone",
+    "milestones",
+    "objective",
+    "objectives",
+    "plan",
+    "plans",
+    "priority",
+    "priorities",
+    "project",
+    "projects",
+    "queue",
+    "queues",
+    "repo",
+    "repos",
+    "request",
+    "requests",
+    "scope",
+    "scopes",
+    "software",
+    "spec",
+    "specs",
+    "state",
+    "states",
+    "status",
+    "summary",
+    "summaries",
+    "system",
+    "systems",
+    "task",
+    "tasks",
+    "team",
+    "teams",
+    "ticket",
+    "tickets",
+    "todo",
+    "todos",
+    "workflow",
+    "workflows",
+    "worklist",
+    "workspace",
+    "workspaces",
 }
 ECOSYSTEM_DESCRIPTOR_FORBIDDEN_WORDS = set(ROLE_DESCRIPTOR_FORBIDDEN_WORDS).union(
     *(keywords for keywords in CREATURE_ECOSYSTEM_KEYWORDS.values()),
@@ -1429,6 +1497,8 @@ def _codex_access_reason_label(kind: str | None) -> str:
         return "Allowance exhausted or rate-limited"
     if cleaned == "auth":
         return "Authentication needed"
+    if cleaned == "local":
+        return "Local Codex CLI unavailable"
     if cleaned == "service":
         return "Service unavailable"
     return "Unknown Codex issue"
@@ -1467,6 +1537,18 @@ def _classify_codex_access_issue(exc: Exception) -> dict[str, str] | None:
         " 401",
         " 403",
     )
+    local_markers = (
+        "failed to launch codex command",
+        "access is denied",
+        "permission denied",
+        "winerror 2",
+        "winerror 5",
+        "no such file or directory",
+        "cannot find the file",
+        "file not found",
+        "not recognized as an internal or external command",
+        "is not recognized as the name of a cmdlet",
+    )
     service_markers = (
         "service unavailable",
         "temporarily unavailable",
@@ -1486,6 +1568,8 @@ def _classify_codex_access_issue(exc: Exception) -> dict[str, str] | None:
         return {"kind": "credits", "detail": detail}
     if any(marker in lowered for marker in auth_markers):
         return {"kind": "auth", "detail": detail}
+    if any(marker in lowered for marker in local_markers):
+        return {"kind": "local", "detail": detail}
     if any(marker in lowered for marker in service_markers):
         return {"kind": "service", "detail": detail}
     return None
@@ -1497,6 +1581,13 @@ def _codex_waiting_message(*, kind: str | None = None) -> str:
         prefix = "CreatureOS is waiting for Codex because the current allowance looks exhausted or rate-limited."
     elif str(kind or "").strip().lower() == "auth":
         prefix = "CreatureOS is waiting for Codex because authentication needs attention."
+    elif str(kind or "").strip().lower() == "local":
+        return (
+            "CreatureOS could not start the local Codex CLI. Install the Codex CLI, make sure the "
+            "`codex` command works in a terminal, or set `CREATURE_OS_CODEX_BIN` to the executable "
+            "CreatureOS should use. Habit runs are paused for now, new chats are on hold, and the "
+            "server will keep checking until the CLI becomes available."
+        )
     elif str(kind or "").strip().lower() == "service":
         prefix = "CreatureOS is waiting for Codex because the service looks unavailable right now."
     return (
@@ -5017,10 +5108,105 @@ def complete_onboarding() -> None:
     _store_onboarding_starter_feed(status="idle", lines=[], run_id=0, last_event_id=0, error="")
 
 
+def _interrupt_running_run(
+    run: Any | None,
+    *,
+    error_text: str,
+    clear_runtime_error: bool = True,
+) -> bool:
+    if run is None or str(_row_value(run, "status") or "").strip().lower() != "running":
+        return False
+    creature_id = int(run["creature_id"])
+    run_id = int(run["id"])
+    metadata = _parse_json(str(_row_value(run, "metadata_json") or ""))
+    run_metadata = metadata if isinstance(metadata, dict) else {}
+    task_next_run_at = None
+    habit_id_raw = run_metadata.get("habit_id")
+    habit_id = int(habit_id_raw or 0) if str(habit_id_raw or "").strip() else 0
+    if habit_id > 0:
+        habit = storage.get_habit_for_creature(creature_id, habit_id)
+        if habit is not None:
+            task_next_run_at = _habit_next_run_at(
+                str(habit["schedule_kind"] or HABIT_SCHEDULE_MANUAL),
+                _habit_schedule_json(habit["schedule_json"]),
+            )
+            storage.record_habit_run_finish(
+                habit_id,
+                status="failed",
+                summary="",
+                error_text=error_text,
+                next_run_at=task_next_run_at,
+                report_path=str(run["notes_path"] or ""),
+            )
+    storage.create_run_event(
+        run_id,
+        event_type="error",
+        body=error_text,
+        metadata={"error_text": error_text, "interrupted": True},
+    )
+    storage.create_run_event(
+        run_id,
+        event_type="status",
+        body='{"type":"status","phase":"failed","interrupted":true}',
+        metadata={"phase": "failed", "interrupted": True},
+    )
+    _clear_run_feed_event_timing(run_id)
+    storage.finish_run(
+        run_id,
+        creature_id=creature_id,
+        status="failed",
+        raw_output_text=None,
+        summary=None,
+        severity="critical",
+        message_text=None,
+        error_text=error_text,
+        next_run_at=task_next_run_at,
+        metadata={
+            **run_metadata,
+            "run_scope": _run_scope_value(run),
+            "conversation_id": int(run["conversation_id"]) if run["conversation_id"] is not None else None,
+            "sandbox_mode": str(run["sandbox_mode"] or ""),
+            "interrupted": True,
+            "interrupted_reason": error_text,
+        },
+        notes_markdown=str(run["notes_markdown"] or "") or None,
+        notes_path=str(run["notes_path"] or "") or None,
+    )
+    _forget_active_run_thread(run_id)
+    if clear_runtime_error:
+        storage.clear_creature_runtime_error(creature_id, next_run_at=task_next_run_at)
+    return True
+
+
+def _interrupt_running_conversation_run(conversation_id: int, *, error_text: str) -> bool:
+    return _interrupt_running_run(
+        storage.latest_run_for_conversation(conversation_id),
+        error_text=error_text,
+    )
+
+
+def _interrupt_running_creature_run(
+    creature_id: int,
+    *,
+    error_text: str,
+    clear_runtime_error: bool = True,
+) -> bool:
+    return _interrupt_running_run(
+        storage.latest_running_run_for_creature(creature_id),
+        error_text=error_text,
+        clear_runtime_error=clear_runtime_error,
+    )
+
+
 def reset_ecosystem() -> None:
     _initialize_runtime()
     timezone_name = _canonical_display_timezone_name(storage.get_meta(DISPLAY_TIMEZONE_KEY)) or _detect_system_timezone_name()
     for creature in list(storage.list_creatures()):
+        _interrupt_running_creature_run(
+            int(creature["id"]),
+            error_text=ECOSYSTEM_RESET_RUN_ERROR_TEXT,
+            clear_runtime_error=False,
+        )
         storage.delete_creature(int(creature["id"]))
     shutil.rmtree(config.data_dir() / "creatures", ignore_errors=True)
     shutil.rmtree(config.data_dir() / MESSAGE_ATTACHMENT_DIRNAME, ignore_errors=True)
@@ -5030,7 +5216,6 @@ def reset_ecosystem() -> None:
     storage.set_meta(DISPLAY_TIMEZONE_KEY, timezone_name)
     _set_display_timezone_cache(timezone_name)
     storage.set_meta(ECOSYSTEM_KEY, DEFAULT_ECOSYSTEM)
-    storage.set_meta(CREATURE_NAMING_ECOSYSTEM_KEY, DEFAULT_ECOSYSTEM)
     _clear_onboarding_state()
     _set_onboarding_phase(DEFAULT_ONBOARDING_PHASE)
     prewarm_onboarding_assets(force=True)
@@ -5042,6 +5227,10 @@ def restart_onboarding() -> dict[str, Any]:
     if keeper is not None:
         conversation = storage.find_conversation_by_title(int(keeper["id"]), KEEPER_CONVERSATION_TITLE)
         if conversation is not None:
+            _interrupt_running_conversation_run(
+                int(conversation["id"]),
+                error_text=ONBOARDING_RESTART_RUN_ERROR_TEXT,
+            )
             storage.delete_conversation(int(conversation["id"]))
     _clear_onboarding_state(keep_phase=True, preserve_warmup=True)
     _set_onboarding_phase(DEFAULT_ONBOARDING_PHASE)
@@ -6509,6 +6698,32 @@ def _keeper_dialog_generated_body(
                 ]
             )
             return "\n".join(lines).strip()
+        if troubled_creatures:
+            troubled_creature = troubled_creatures[0]
+            troubled_name = str(troubled_creature.get("display_name") or "That creature").strip() or "That creature"
+            error_text = _notification_preview(str(troubled_creature.get("last_error") or "").strip(), limit=220)
+            lines.extend(
+                [
+                    "",
+                    f"**{troubled_name}** failed to wake cleanly.",
+                    "",
+                    "Something in the summoning went wrong before it could speak for itself.",
+                ]
+            )
+            if error_text:
+                lines.extend(
+                    [
+                        "",
+                        f"Last trouble: {error_text}",
+                    ]
+                )
+            lines.extend(
+                [
+                    "",
+                    "If you want, I can try the summoning again once the path is clear.",
+                ]
+            )
+            return "\n".join(lines).strip()
         lines.extend(
             [
                 "",
@@ -6667,9 +6882,13 @@ def _keeper_dialog_state(
     ]
     troubled_creatures = [
         creature
-        for creature in visible_creatures
-        if str(creature.get("status") or "").lower() == "error"
-        or str(creature.get("last_run_severity") or "").lower() in {"warning", "critical"}
+        for creature in creatures
+        if not _is_keeper_creature(creature)
+        and (
+            bool(creature.get("intro_failed"))
+            or str(creature.get("status") or "").lower() == "error"
+            or str(creature.get("last_run_severity") or "").lower() in {"warning", "critical"}
+        )
     ]
     latest_creature_body = next(
         (str(item.get("body") or "").strip() for item in reversed(list(messages)) if str(item.get("role") or "").lower() == "creature" and str(item.get("body") or "").strip()),
@@ -7178,7 +7397,9 @@ def _extract_explicit_creature_name(brief: str) -> str | None:
         if match:
             raw_name = re.sub(r"\s+", " ", match.group(1)).strip(" .,:;!-")
             if raw_name:
-                return _title_case_words(raw_name.split())
+                normalized = _normalize_generated_creature_name(raw_name)
+                if normalized:
+                    return _title_case_words(normalized.split())
     return None
 
 
@@ -7207,6 +7428,37 @@ def _normalize_generated_name(value: Any) -> str:
     return " ".join(str(value or "").strip().split())
 
 
+def _normalize_generated_creature_name(value: Any) -> str:
+    cleaned = _normalize_generated_name(value)
+    if not cleaned:
+        return ""
+    if len(cleaned) > MAX_CREATURE_DISPLAY_NAME_CHARS:
+        cleaned = cleaned[:MAX_CREATURE_DISPLAY_NAME_CHARS].rstrip()
+    if not re.search(r"[A-Za-z]", cleaned):
+        return ""
+    if re.search(r"[:/\\\\|@#]", cleaned):
+        return ""
+
+    words = cleaned.split()
+    if len(words) > 3:
+        return ""
+
+    normalized_words: list[str] = []
+    lowered_words: list[str] = []
+    for word in words:
+        bare = re.sub(r"^[^A-Za-z0-9]+|[^A-Za-z0-9]+$", "", word)
+        if not bare or not re.search(r"[A-Za-z]", bare):
+            return ""
+        if not re.fullmatch(r"[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)*", bare):
+            return ""
+        normalized_words.append(bare)
+        lowered_words.append(bare.lower())
+
+    if any(word in ROLE_NAME_LEAK_WORDS or word in GENERATED_NAME_OPERATIONAL_WORDS for word in lowered_words):
+        return ""
+    return " ".join(normalized_words)
+
+
 def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
     candidates: list[str] = []
     stripped = str(raw_text or "").strip()
@@ -7232,12 +7484,17 @@ def _extract_json_object(raw_text: str) -> dict[str, Any] | None:
     return None
 
 
-def _coerce_string_list(values: Any, *, limit: int) -> list[str]:
+def _coerce_string_list(
+    values: Any,
+    *,
+    limit: int,
+    normalizer: Callable[[Any], str] = _normalize_generated_name,
+) -> list[str]:
     items = values if isinstance(values, list) else []
     cleaned: list[str] = []
     seen: set[str] = set()
     for item in items:
-        text = _normalize_generated_name(item)
+        text = normalizer(item)
         if not text:
             continue
         lowered = text.lower()
@@ -7327,7 +7584,11 @@ def _codex_summoning_name_candidates(
     payload = _extract_json_object(result.final_text)
     if not payload:
         return []
-    return _coerce_string_list(payload.get("candidates") or payload.get("names"), limit=10)
+    return _coerce_string_list(
+        payload.get("candidates") or payload.get("names"),
+        limit=10,
+        normalizer=_normalize_generated_creature_name,
+    )
 
 
 def _summoning_name_selection_prompt(
@@ -7390,10 +7651,11 @@ def _fallback_summoned_display_name(*, brief: str, ecosystem: str) -> str:
         for token in _brief_keywords(brief)
         if token not in ROLE_NAME_LEAK_WORDS and token not in ROLE_NORMALIZATION_TERMS
     ]
-    if keywords:
-        candidate = _title_case_words(keywords[:2])
-        if candidate:
-            return _next_available_display_name(candidate)
+    if len(keywords) >= 2:
+        for index in range(len(keywords) - 1):
+            candidate = _normalize_generated_creature_name(_title_case_words(keywords[index : index + 2]))
+            if candidate:
+                return _next_available_display_name(candidate)
     ecosystem_label = (_ecosystem_label(ecosystem) or "Creature").removeprefix("The ").strip()
     seed = ecosystem_label.split()[-1] if ecosystem_label else "Creature"
     return _next_available_display_name(f"{seed} Echo")
@@ -7427,7 +7689,7 @@ def _resolve_summoned_name_plan(
     deduped_candidates: list[str] = []
     candidate_lookup: dict[str, str] = {}
     for candidate in candidates:
-        cleaned = _normalize_generated_name(candidate)
+        cleaned = _normalize_generated_creature_name(candidate)
         if not cleaned:
             continue
         lowered = cleaned.lower()
@@ -7446,7 +7708,7 @@ def _resolve_summoned_name_plan(
         if deduped_candidates
         else None
     )
-    selected_candidate = _normalize_generated_name(
+    selected_candidate = _normalize_generated_creature_name(
         (selection or {}).get("display_name") or (selection or {}).get("name")
     )
     canonical_selected = candidate_lookup.get(selected_candidate.lower()) if selected_candidate else None
@@ -7461,12 +7723,16 @@ def _resolve_summoned_name_plan(
     display_name = _next_available_display_name(canonical_selected)
     selected_lower = canonical_selected.lower()
     display_lower = display_name.lower()
-    selected_alternates = _coerce_string_list((selection or {}).get("alternates"), limit=10)
+    selected_alternates = _coerce_string_list(
+        (selection or {}).get("alternates"),
+        limit=10,
+        normalizer=_normalize_generated_creature_name,
+    )
     alternates_source = selected_alternates or deduped_candidates
     alternates: list[str] = []
     seen_alternates: set[str] = set()
     for alternate in alternates_source:
-        cleaned = _normalize_generated_name(alternate)
+        cleaned = _normalize_generated_creature_name(alternate)
         if not cleaned:
             continue
         canonical = candidate_lookup.get(cleaned.lower(), cleaned)
@@ -11291,6 +11557,7 @@ def delete_conversation(
     if conversation is None:
         raise KeyError(f"Conversation {conversation_id} does not belong to creature {slug}")
 
+    _interrupt_running_conversation_run(conversation_id, error_text=CONVERSATION_RESET_RUN_ERROR_TEXT)
     storage.delete_conversation(conversation_id)
 
     fallback = None

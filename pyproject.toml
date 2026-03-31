@@ -24,6 +24,7 @@ dependencies = [
   "fastapi",
   "jinja2",
   "python-multipart",
+  "tzdata; platform_system == 'Windows'",
   "uvicorn",
 ]
 
