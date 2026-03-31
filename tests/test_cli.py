@@ -1,3 +1,4 @@
+from itertools import islice
 from pathlib import Path
 import signal
 import subprocess
@@ -172,6 +173,48 @@ def test_supervisor_command_args_include_runtime_paths_and_force_scan(tmp_path: 
         "--tailscale",
         "--force-scan",
     ]
+
+
+def test_candidate_ports_jump_from_404_to_4040():
+    assert list(islice(cli._candidate_ports(404), 4)) == [404, 4040, 4041, 4042]
+
+
+def test_candidate_ports_increment_from_custom_port():
+    assert list(islice(cli._candidate_ports(5050), 3)) == [5050, 5051, 5052]
+
+
+def test_select_runtime_port_skips_unavailable_ports(monkeypatch):
+    attempts: list[tuple[str, int]] = []
+    closed_ports: list[int] = []
+
+    class FakeSocket:
+        def __init__(self, port: int):
+            self.port = port
+
+        def close(self) -> None:
+            closed_ports.append(self.port)
+
+    def fake_create_listening_socket(host: str, port: int):
+        attempts.append((host, port))
+        if port in {404, 4040}:
+            raise OSError(f"{port} unavailable")
+        return FakeSocket(port)
+
+    monkeypatch.setattr(cli, "_create_listening_socket", fake_create_listening_socket)
+    monkeypatch.setattr(cli, "_bind_hosts", lambda *, bind_mode: ["127.0.0.1"])
+
+    selected_port = cli._select_runtime_port(
+        bind_mode=cli.SERVE_BIND_MODE_DEFAULT,
+        requested_port=404,
+    )
+
+    assert selected_port == 4041
+    assert attempts == [
+        ("127.0.0.1", 404),
+        ("127.0.0.1", 4040),
+        ("127.0.0.1", 4041),
+    ]
+    assert closed_ports == [4041]
 
 
 def test_wait_for_worker_ready_uses_pid_reported_by_ready_file(monkeypatch):

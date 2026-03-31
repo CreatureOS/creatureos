@@ -161,6 +161,68 @@ def _server_display_urls(*, bind_mode: str) -> list[str]:
     return urls
 
 
+def _requested_port() -> int:
+    raw = os.getenv(config.PORT_ENV, "").strip()
+    if raw:
+        return int(raw)
+    return config.DEFAULT_PORT
+
+
+def _candidate_ports(requested_port: int):
+    port = max(1, int(requested_port))
+    if port == config.DEFAULT_PORT:
+        yield port
+        port = max(config.FALLBACK_PORT_START, port + 1)
+    while port <= 65535:
+        yield port
+        port += 1
+
+
+def _bind_hosts(*, bind_mode: str) -> list[str]:
+    normalized_mode = _normalize_bind_mode(bind_mode)
+    if normalized_mode == SERVE_BIND_MODE_TAILSCALE:
+        tailscale_ip = _detect_tailscale_ipv4()
+        hosts = ["127.0.0.1"]
+        if tailscale_ip and tailscale_ip not in hosts:
+            hosts.append(tailscale_ip)
+        return hosts
+    return [config.host()]
+
+
+def _set_runtime_port(port: int) -> None:
+    os.environ[config.ACTIVE_PORT_ENV] = str(int(port))
+
+
+def _select_runtime_port(*, bind_mode: str, requested_port: int) -> int:
+    hosts = _bind_hosts(bind_mode=bind_mode)
+    last_error: OSError | None = None
+    for candidate in _candidate_ports(requested_port):
+        sockets: list[socket.socket] = []
+        try:
+            for host in hosts:
+                sockets.append(_create_listening_socket(host, candidate))
+            return candidate
+        except OSError as exc:
+            last_error = exc
+        finally:
+            for sock in sockets:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+    message = f"No available port found starting from {requested_port}."
+    if last_error is None:
+        raise OSError(message)
+    raise OSError(message) from last_error
+
+
+def _configure_runtime_port(*, bind_mode: str) -> tuple[int, int]:
+    requested_port = _requested_port()
+    selected_port = _select_runtime_port(bind_mode=bind_mode, requested_port=requested_port)
+    _set_runtime_port(selected_port)
+    return requested_port, selected_port
+
+
 def _write_server_pid(
     *,
     supervisor_pid: int,
@@ -283,10 +345,10 @@ def _launch_server_worker(source_revision: str, *, bind_mode: str) -> tuple[subp
     return worker, booted_at
 
 
-def _create_listening_socket(host: str) -> socket.socket:
+def _create_listening_socket(host: str, port: int) -> socket.socket:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind((host, config.port()))
+    sock.bind((host, int(port)))
     sock.listen(socket.SOMAXCONN)
     sock.set_inheritable(True)
     return sock
@@ -411,6 +473,10 @@ def _run_server_worker(*, force_scan: bool = False, bind_mode: str = SERVE_BIND_
     _prepare_server_runtime(force_scan=force_scan)
     force_scan = False
     normalized_mode = _normalize_bind_mode(bind_mode)
+    if not os.getenv(config.ACTIVE_PORT_ENV, "").strip():
+        requested_port, selected_port = _configure_runtime_port(bind_mode=normalized_mode)
+        if selected_port != requested_port:
+            print(f"Port {requested_port} unavailable; using {selected_port} instead.", flush=True)
     if normalized_mode == SERVE_BIND_MODE_TAILSCALE:
         tailscale_ip = _detect_tailscale_ipv4()
         listen_hosts = ["127.0.0.1"]
@@ -419,7 +485,7 @@ def _run_server_worker(*, force_scan: bool = False, bind_mode: str = SERVE_BIND_
         sockets: list[socket.socket] = []
         try:
             for host in listen_hosts:
-                sockets.append(_create_listening_socket(host))
+                sockets.append(_create_listening_socket(host, config.port()))
             print("CreatureOS dual-bind mode:", flush=True)
             print(f"  Local: http://127.0.0.1:{config.port()}", flush=True)
             if tailscale_ip:
@@ -515,7 +581,10 @@ def _run_server_supervisor(*, force_scan: bool = False, bind_mode: str = SERVE_B
         signal.signal(signal.SIGHUP, _handle_reload)
 
     try:
+        requested_port, selected_port = _configure_runtime_port(bind_mode=normalized_bind_mode)
         print("404: Humans not found.", flush=True)
+        if selected_port != requested_port:
+            print(f"Port {requested_port} unavailable; using {selected_port} instead.", flush=True)
         print(f"Creatures awakening at {config.app_url().rstrip('/')}", flush=True)
         print(f"Working root: {config.workspace_root()} ({config.workspace_root_source()})", flush=True)
         print(f"Data dir: {config.data_dir()} ({config.data_dir_source()})", flush=True)

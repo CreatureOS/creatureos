@@ -8,6 +8,12 @@ from contextvars import ContextVar
 from pathlib import Path
 
 
+ACTIVE_PORT_ENV = "CREATURE_OS_ACTIVE_PORT"
+PORT_ENV = "CREATURE_OS_PORT"
+DEFAULT_PORT = 404
+FALLBACK_PORT_START = 4040
+
+
 _DATA_DIR_OVERRIDE: ContextVar[Path | None] = ContextVar("creatureos_data_dir_override", default=None)
 _DB_PATH_OVERRIDE: ContextVar[Path | None] = ContextVar("creatureos_db_path_override", default=None)
 _WORKSPACE_ROOT_OVERRIDE: ContextVar[Path | None] = ContextVar("creatureos_workspace_root_override", default=None)
@@ -199,7 +205,7 @@ def public_host() -> str:
 
 
 def port() -> int:
-    return int(_env("CREATURE_OS_PORT") or "404")
+    return int(_env(ACTIVE_PORT_ENV, PORT_ENV) or str(DEFAULT_PORT))
 
 
 def codex_bin() -> str:
