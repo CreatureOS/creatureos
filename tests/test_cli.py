@@ -1,7 +1,10 @@
+import errno
 from itertools import islice
 from pathlib import Path
 import signal
 import subprocess
+
+import pytest
 
 from creatureos import cli
 from creatureos import config
@@ -197,7 +200,7 @@ def test_select_runtime_port_skips_unavailable_ports(monkeypatch):
     def fake_create_listening_socket(host: str, port: int):
         attempts.append((host, port))
         if port in {404, 4040}:
-            raise OSError(f"{port} unavailable")
+            raise OSError(errno.EADDRINUSE, f"{port} unavailable")
         return FakeSocket(port)
 
     monkeypatch.setattr(cli, "_create_listening_socket", fake_create_listening_socket)
@@ -215,6 +218,92 @@ def test_select_runtime_port_skips_unavailable_ports(monkeypatch):
         ("127.0.0.1", 4041),
     ]
     assert closed_ports == [4041]
+
+
+def test_select_runtime_port_raises_non_conflict_bind_errors(monkeypatch):
+    attempts: list[tuple[str, int]] = []
+
+    def fake_create_listening_socket(host: str, port: int):
+        attempts.append((host, port))
+        raise OSError(errno.EADDRNOTAVAIL, "bad bind host")
+
+    monkeypatch.setattr(cli, "_create_listening_socket", fake_create_listening_socket)
+    monkeypatch.setattr(cli, "_bind_hosts", lambda *, bind_mode: ["203.0.113.7"])
+
+    with pytest.raises(OSError, match="bad bind host"):
+        cli._select_runtime_port(
+            bind_mode=cli.SERVE_BIND_MODE_DEFAULT,
+            requested_port=404,
+        )
+
+    assert attempts == [("203.0.113.7", 404)]
+
+
+def test_select_runtime_port_falls_back_when_privileged_port_is_denied(monkeypatch):
+    attempts: list[tuple[str, int]] = []
+    closed_ports: list[int] = []
+
+    class FakeSocket:
+        def __init__(self, port: int):
+            self.port = port
+
+        def close(self) -> None:
+            closed_ports.append(self.port)
+
+    def fake_create_listening_socket(host: str, port: int):
+        attempts.append((host, port))
+        if port == 404:
+            raise OSError(errno.EACCES, "permission denied")
+        return FakeSocket(port)
+
+    monkeypatch.setattr(cli, "_create_listening_socket", fake_create_listening_socket)
+    monkeypatch.setattr(cli, "_bind_hosts", lambda *, bind_mode: ["127.0.0.1"])
+
+    selected_port = cli._select_runtime_port(
+        bind_mode=cli.SERVE_BIND_MODE_DEFAULT,
+        requested_port=404,
+    )
+
+    assert selected_port == 4040
+    assert attempts == [
+        ("127.0.0.1", 404),
+        ("127.0.0.1", 4040),
+    ]
+    assert closed_ports == [4040]
+
+
+def test_reconfigure_runtime_port_after_restart_reports_port_changes(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli,
+        "_configure_runtime_port",
+        lambda *, bind_mode: (404, 4041),
+    )
+
+    requested_port, selected_port = cli._reconfigure_runtime_port_after_restart(
+        bind_mode=cli.SERVE_BIND_MODE_DEFAULT,
+        previous_port=404,
+    )
+
+    captured = capsys.readouterr()
+    assert (requested_port, selected_port) == (404, 4041)
+    assert "Port 404 unavailable; using 4041 instead." in captured.out
+
+
+def test_reconfigure_runtime_port_after_restart_reports_return_to_requested_port(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli,
+        "_configure_runtime_port",
+        lambda *, bind_mode: (404, 404),
+    )
+
+    requested_port, selected_port = cli._reconfigure_runtime_port_after_restart(
+        bind_mode=cli.SERVE_BIND_MODE_DEFAULT,
+        previous_port=4041,
+    )
+
+    captured = capsys.readouterr()
+    assert (requested_port, selected_port) == (404, 404)
+    assert "Port 4041 cleared; returning to 404." in captured.out
 
 
 def test_wait_for_worker_ready_uses_pid_reported_by_ready_file(monkeypatch):

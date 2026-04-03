@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import argparse
 import asyncio
 import ipaddress
@@ -193,6 +194,14 @@ def _set_runtime_port(port: int) -> None:
     os.environ[config.ACTIVE_PORT_ENV] = str(int(port))
 
 
+def _should_try_next_port(exc: OSError, *, port: int) -> bool:
+    if getattr(exc, "errno", None) == errno.EADDRINUSE:
+        return True
+    if port < 1024 and getattr(exc, "errno", None) in {errno.EACCES, errno.EPERM}:
+        return True
+    return int(getattr(exc, "winerror", 0) or 0) in {10048, 10013}
+
+
 def _select_runtime_port(*, bind_mode: str, requested_port: int) -> int:
     hosts = _bind_hosts(bind_mode=bind_mode)
     last_error: OSError | None = None
@@ -203,6 +212,8 @@ def _select_runtime_port(*, bind_mode: str, requested_port: int) -> int:
                 sockets.append(_create_listening_socket(host, candidate))
             return candidate
         except OSError as exc:
+            if not _should_try_next_port(exc, port=candidate):
+                raise
             last_error = exc
         finally:
             for sock in sockets:
@@ -220,6 +231,15 @@ def _configure_runtime_port(*, bind_mode: str) -> tuple[int, int]:
     requested_port = _requested_port()
     selected_port = _select_runtime_port(bind_mode=bind_mode, requested_port=requested_port)
     _set_runtime_port(selected_port)
+    return requested_port, selected_port
+
+
+def _reconfigure_runtime_port_after_restart(*, bind_mode: str, previous_port: int) -> tuple[int, int]:
+    requested_port, selected_port = _configure_runtime_port(bind_mode=bind_mode)
+    if selected_port != requested_port:
+        print(f"Port {requested_port} unavailable; using {selected_port} instead.", flush=True)
+    elif selected_port != previous_port:
+        print(f"Port {previous_port} cleared; returning to {selected_port}.", flush=True)
     return requested_port, selected_port
 
 
@@ -623,6 +643,11 @@ def _run_server_supervisor(*, force_scan: bool = False, bind_mode: str = SERVE_B
                     )
                     time.sleep(SERVER_RESTART_BACKOFF_SECONDS)
                 worker_runtime_pid = None
+                if launch_count > 0:
+                    _reconfigure_runtime_port_after_restart(
+                        bind_mode=normalized_bind_mode,
+                        previous_port=config.port(),
+                    )
                 current_revision = config.server_source_revision()
                 _remove_server_ready_file()
                 worker, worker_started_at = _launch_server_worker(current_revision, bind_mode=normalized_bind_mode)

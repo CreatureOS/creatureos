@@ -1,20 +1,26 @@
 # CreatureOS
 
-CreatureOS is a local-first habitat for persistent Codex creatures.
+CreatureOS turns Codex into a local-first habitat of durable creatures on your machine.
 
-You install it, start it, and talk to The Keeper. The Keeper helps summon creatures that remember what matters, keep working over time, and learn habits with you.
+Each creature has a purpose, memory, chats, worklists, and teachable habits. The Keeper helps decide what creature should exist, what should stay alive, and whether the habitat is actually serving you well.
 
 ## Quick Start
 
 Preferred path:
 
-Open Codex and type:
+If you do not already have Codex installed, first download the Codex app or CLI:
 
 ```text
-install creatureos using pip and spin it up
+https://chatgpt.com/codex/get-started
 ```
 
-That is the nicest path because Codex can handle the install, check that the right dependencies are present, and get the server running for you.
+Then set Codex to full access, open Codex, and type:
+
+```text
+install creatureos using pip and spin it up, troubleshoot any issues
+```
+
+That is the nicest path because Codex can handle the install, fix dependency issues, verify that the Codex CLI is actually usable, and get the server running for you.
 
 Manual path:
 
@@ -48,9 +54,36 @@ You do not need to run a separate database setup step first.
 - Python `3.10+`
 - the `codex` CLI on your `PATH`
 - Codex authenticated locally
+- if you have not installed Codex yet, start here: `https://chatgpt.com/codex/get-started`
 
 Optional:
 - Tailscale, if you want private access from another device with `--tailscale`
+
+## Connect From Your Phone
+
+CreatureOS can run on your computer and still be reachable from your phone.
+
+The usual path is:
+- run `creatureos serve --tailscale` on the computer
+- install Tailscale on both the computer and the phone
+- open the Tailscale CreatureOS URL from the phone
+
+If you want Codex to walk you through it, set Codex to full access and type:
+
+```text
+please give me exact instructions on how to connect to this on my phone using Tailscale on this device and my phone
+```
+
+## What Creatures Can Do
+
+CreatureOS is meant for ongoing work, not one-off prompting. A creature can:
+
+- copy-edit a book chapter and keep the next revision alive
+- audit a repo or server config and come back with concrete follow-ups
+- draft and post on social media for you from the machine where your tools live
+- maintain an ongoing worklist instead of forgetting what was open
+- remember unresolved threads when you return tomorrow
+- learn a habit once the shape of repeated work is actually clear
 
 ## A Little More Context
 
