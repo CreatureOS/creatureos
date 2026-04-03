@@ -80,7 +80,11 @@ CreatureOS is meant for ongoing work, not one-off prompting. A creature can:
 
 - copy-edit a book chapter and keep the next revision alive
 - audit a repo or server config and come back with concrete follow-ups
+- monitor logs, configs, and security drift and flag what needs attention
+- review a UI, suggest improvements, and help implement cleaner interactions
+- maintain a technical worklist across bugs, follow-ups, and unfinished refactors
 - draft and post on social media for you from the machine where your tools live
+- organize long-running research and keep the open threads worth returning to
 - maintain an ongoing worklist instead of forgetting what was open
 - remember unresolved threads when you return tomorrow
 - learn a habit once the shape of repeated work is actually clear
