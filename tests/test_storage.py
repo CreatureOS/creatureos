@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from creatureos import storage
 
 
@@ -173,3 +175,126 @@ def test_pause_and_resume_habit_update_enabled_state(runtime_env):
     assert resumed is not None
     assert int(resumed["enabled"] or 0) == 1
     assert resumed["next_run_at"] is not None
+
+
+def test_run_locks_allow_multiple_chat_runs_but_only_one_per_chat_and_activity(runtime_env):
+    creature = storage.save_creature(
+        slug="chat-locks",
+        display_name="Chat Locks",
+        system_role="",
+        is_pinned=False,
+        can_delete=True,
+        ecosystem="terminal",
+        purpose_summary="Exercise run locking.",
+        temperament="steady",
+        concern="Verify per-chat locking.",
+        system_prompt="Chat lock prompt.",
+        workdir="/tmp",
+    )
+    creature_id = int(creature["id"])
+    conversation_one = storage.create_conversation(creature_id, title="One")
+    conversation_two = storage.create_conversation(creature_id, title="Two")
+
+    first_chat_run = storage.create_run(
+        creature_id,
+        trigger_type="user_reply",
+        prompt_text="chat one",
+        thread_id="thread-one",
+        conversation_id=int(conversation_one["id"]),
+        run_scope="chat",
+        sandbox_mode="workspace-write",
+    )
+    second_chat_run = storage.create_run(
+        creature_id,
+        trigger_type="user_reply",
+        prompt_text="chat two",
+        thread_id="thread-two",
+        conversation_id=int(conversation_two["id"]),
+        run_scope="chat",
+        sandbox_mode="workspace-write",
+    )
+
+    assert storage.latest_running_run_for_conversation(int(conversation_one["id"])) is not None
+    assert storage.latest_running_run_for_conversation(int(conversation_two["id"])) is not None
+
+    with pytest.raises(RuntimeError, match="active run lock"):
+        storage.create_run(
+            creature_id,
+            trigger_type="user_reply",
+            prompt_text="chat one again",
+            thread_id="thread-three",
+            conversation_id=int(conversation_one["id"]),
+            run_scope="chat",
+            sandbox_mode="workspace-write",
+        )
+
+    activity_run = storage.create_run(
+        creature_id,
+        trigger_type="habit",
+        prompt_text="background pass",
+        thread_id="activity-thread",
+        conversation_id=None,
+        run_scope="activity",
+        sandbox_mode="read-only",
+    )
+
+    with pytest.raises(RuntimeError, match="active activity run lock"):
+        storage.create_run(
+            creature_id,
+            trigger_type="habit",
+            prompt_text="second background pass",
+            thread_id="activity-thread-2",
+            conversation_id=None,
+            run_scope="activity",
+            sandbox_mode="read-only",
+        )
+
+    storage.finish_run(
+        int(first_chat_run["id"]),
+        creature_id=creature_id,
+        status="completed",
+        raw_output_text="done",
+        summary="done",
+        severity="info",
+        message_text="done",
+        error_text=None,
+        next_run_at=None,
+        metadata={},
+        notes_markdown=None,
+        notes_path=None,
+    )
+    storage.finish_run(
+        int(second_chat_run["id"]),
+        creature_id=creature_id,
+        status="completed",
+        raw_output_text="done",
+        summary="done",
+        severity="info",
+        message_text="done",
+        error_text=None,
+        next_run_at=None,
+        metadata={},
+        notes_markdown=None,
+        notes_path=None,
+    )
+    still_running = storage.get_creature(creature_id)
+    assert still_running is not None
+    assert str(still_running["status"]) == "running"
+
+    storage.finish_run(
+        int(activity_run["id"]),
+        creature_id=creature_id,
+        status="completed",
+        raw_output_text="done",
+        summary="done",
+        severity="info",
+        message_text="done",
+        error_text=None,
+        next_run_at=None,
+        metadata={},
+        notes_markdown=None,
+        notes_path=None,
+    )
+    finished_creature = storage.get_creature(creature_id)
+    assert finished_creature is not None
+    assert str(finished_creature["status"]) == "idle"

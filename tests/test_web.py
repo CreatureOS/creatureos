@@ -116,3 +116,27 @@ def test_new_habit_creates_seeded_chat_and_first_reply_renames_it(client, create
     renamed = storage.get_conversation(conversation_id)
     assert renamed is not None
     assert str(renamed["title"]) != service.NEW_HABIT_CHAT_TITLE
+
+
+def test_post_message_ajax_rejects_busy_current_chat(client, create_test_creature):
+    creature = create_test_creature(display_name="Juniper", concern="Keep me company.")
+    _seed_intro(creature)
+    conversation = storage.create_conversation(int(creature["id"]), title="Busy chat")
+    storage.create_run(
+        int(creature["id"]),
+        trigger_type="user_reply",
+        prompt_text="Reply in progress",
+        thread_id="thread-busy",
+        conversation_id=int(conversation["id"]),
+        run_scope=service.RUN_SCOPE_CHAT,
+        sandbox_mode="workspace-write",
+    )
+
+    response = client.post(
+        f"/creatures/{creature['slug']}/messages",
+        data={"conversation_id": int(conversation["id"]), "body": "hello"},
+        headers={"x-creatureos-ajax": "1"},
+    )
+
+    assert response.status_code == 400
+    assert "current reply to finish" in response.json()["detail"]

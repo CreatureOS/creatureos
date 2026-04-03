@@ -48,8 +48,6 @@ RUN_SCOPE_CHAT = "chat"
 LAST_VIEWED_CREATURE_KEY = "last_viewed_creature_slug"
 LAST_VIEWED_HABIT_KEY_PREFIX = "last_viewed_habit:"
 MAX_THINKING_MODEL_CHARS = 80
-BUSY_ACTION_QUEUE = "queue"
-BUSY_ACTION_STEER = "steer"
 MAX_CONVERSATION_MESSAGES = 10
 MAX_FOLLOWUP_CONVERSATION_MESSAGES = 4
 MAX_MESSAGE_ATTACHMENTS = 8
@@ -5180,7 +5178,7 @@ def _interrupt_running_run(
 
 def _interrupt_running_conversation_run(conversation_id: int, *, error_text: str) -> bool:
     return _interrupt_running_run(
-        storage.latest_run_for_conversation(conversation_id),
+        storage.latest_running_run_for_conversation(conversation_id),
         error_text=error_text,
     )
 
@@ -5191,11 +5189,14 @@ def _interrupt_running_creature_run(
     error_text: str,
     clear_runtime_error: bool = True,
 ) -> bool:
-    return _interrupt_running_run(
-        storage.latest_running_run_for_creature(creature_id),
-        error_text=error_text,
-        clear_runtime_error=clear_runtime_error,
-    )
+    interrupted = False
+    for run in storage.list_running_runs_for_creature(creature_id):
+        interrupted = _interrupt_running_run(
+            run,
+            error_text=error_text,
+            clear_runtime_error=clear_runtime_error,
+        ) or interrupted
+    return interrupted
 
 
 def reset_ecosystem() -> None:
@@ -6550,7 +6551,7 @@ def _creature_intro_state(creature: Any) -> dict[str, Any]:
         ),
         None,
     )
-    latest_running = storage.latest_running_run_for_creature(creature_id)
+    latest_running = storage.latest_running_activity_run_for_creature(creature_id)
     latest_intro_status = str(_row_value(latest_running or latest_intro_attempt, "status") or "").lower()
     latest_bootstrap_status = str(_row_value(latest_running or latest_bootstrap, "status") or "").lower()
     intro_failed = bool(
@@ -6577,7 +6578,7 @@ def _should_retry_interrupted_bootstrap(creature: Any, intro_state: dict[str, An
     if bool(state.get("intro_ready")) or not bool(state.get("intro_failed")):
         return False
     creature_id = int(creature["id"])
-    if storage.latest_running_run_for_creature(creature_id) is not None:
+    if storage.latest_running_activity_run_for_creature(creature_id) is not None:
         return False
     latest_bootstrap = next(
         (row for row in storage.recent_runs(creature_id, limit=20) if str(row["trigger_type"] or "").strip().lower() == "bootstrap"),
@@ -6607,7 +6608,7 @@ def _should_queue_initial_intro_followup(creature: Any, intro_state: dict[str, A
     if bool(state.get("intro_ready")) or bool(state.get("intro_failed")):
         return False
     creature_id = int(creature["id"])
-    if storage.latest_running_run_for_creature(creature_id) is not None:
+    if storage.latest_running_activity_run_for_creature(creature_id) is not None:
         return False
     if storage.find_conversation_by_title(creature_id, INTRODUCTION_CHAT_TITLE) is not None:
         return False
@@ -11706,6 +11707,8 @@ def send_user_message(
         conversation = storage.get_conversation_for_creature(int(creature["id"]), conversation_id)
         if conversation is None:
             raise KeyError(f"Conversation {conversation_id} does not belong to creature {slug}")
+        if storage.latest_running_run_for_conversation(conversation_id) is not None:
+            raise ValueError("This chat is still running. Wait for the current reply to finish before sending another message here.")
     if final_owner_mode != _normalize_owner_mode(_row_value(conversation, "owner_mode")):
         storage.set_conversation_owner_mode(conversation_id, final_owner_mode)
     message_row = storage.create_message(
@@ -11763,10 +11766,6 @@ def set_conversation_owner_mode(slug: str, conversation_id: int, owner_mode: str
     return _decorate_conversation(updated)
 
 
-def _normalize_busy_action(value: str | None) -> str:
-    return BUSY_ACTION_STEER if str(value or "").strip().lower() == BUSY_ACTION_STEER else BUSY_ACTION_QUEUE
-
-
 def _schedule_followup_after_run(creature_id: int) -> None:
     creature = storage.get_creature(creature_id)
     if creature is None:
@@ -11774,7 +11773,6 @@ def _schedule_followup_after_run(creature_id: int) -> None:
     pending_conversation = storage.next_pending_conversation(creature_id)
     if pending_conversation is not None:
         owner_mode = _normalize_owner_mode(_row_value(pending_conversation, "owner_mode"))
-        action = str(_row_value(pending_conversation, "pending_action") or BUSY_ACTION_QUEUE)
         result = start_background_run(
             str(creature["slug"]),
             trigger_type="user_reply",
@@ -11782,10 +11780,7 @@ def _schedule_followup_after_run(creature_id: int) -> None:
             conversation_id=int(pending_conversation["id"]),
             allow_code_changes=_allow_code_changes_for_owner_mode(owner_mode),
             run_scope=RUN_SCOPE_CHAT,
-            busy_action=action,
         )
-        if str(result.get("status") or "") == "running":
-            storage.clear_conversation_action(int(pending_conversation["id"]))
         return
 
 
@@ -11835,13 +11830,10 @@ def _prepare_run(
     allow_code_changes = _allow_repo_edits(creature, requested=requested_code_changes)
 
     conversation = None
-    conversation_had_pending_owner_reply = False
     owner_mode = DEFAULT_OWNER_MODE
     thread_id = str(creature["codex_thread_id"] or "").strip()
     if normalized_scope == RUN_SCOPE_CHAT:
         conversation = _resolve_conversation_for_run(creature, conversation_id=conversation_id)
-        pending = storage.next_pending_conversation(int(creature["id"]))
-        conversation_had_pending_owner_reply = pending is not None and int(pending["id"]) == int(conversation["id"])
         owner_mode = _normalize_owner_mode(_row_value(conversation, "owner_mode"))
         thread_id = str(_row_value(conversation, "codex_thread_id") or "").strip()
         if not thread_id:
@@ -11885,7 +11877,6 @@ def _prepare_run(
         "start_new_thread": start_new_thread,
         "previous_thread_id": thread_id,
         "habit": habit,
-        "conversation_had_pending_owner_reply": conversation_had_pending_owner_reply,
         "db_path": str(config.db_path()),
         "data_dir": str(config.data_dir()),
     }
@@ -11910,7 +11901,6 @@ def _execute_prepared_run(
     previous_thread_id = str(prepared.get("previous_thread_id") or "")
     run_scope = str(prepared.get("run_scope") or RUN_SCOPE_ACTIVITY)
     habit = prepared.get("habit") or None
-    conversation_had_pending_owner_reply = bool(prepared.get("conversation_had_pending_owner_reply"))
 
     try:
         def forward_event(event: dict[str, Any]) -> None:
@@ -12248,9 +12238,7 @@ def start_background_run(
     start_new_thread: bool = False,
     habit_id: int | None = None,
     run_scope: str | None = None,
-    busy_action: str | None = None,
 ) -> dict[str, Any]:
-    normalized_busy_action = _normalize_busy_action(busy_action)
     normalized_slug = str(canonical_creature_slug(slug))
     normalized_scope = (
         RUN_SCOPE_CHAT
@@ -12266,7 +12254,6 @@ def start_background_run(
             "sandbox_mode": "read-only",
             "run_scope": normalized_scope,
             "status": "waiting",
-            "busy_action": normalized_busy_action,
             "waiting_message": _codex_waiting_message(kind=_load_codex_access_state_raw()["reason_kind"]),
         }
     try:
@@ -12286,9 +12273,23 @@ def start_background_run(
         creature = storage.get_creature_by_slug(str(canonical_creature_slug(slug)))
         if creature is None:
             raise
-        if normalized_scope == RUN_SCOPE_CHAT and conversation_id is not None and trigger_type == "user_reply":
-            storage.queue_conversation_action(conversation_id, action=normalized_busy_action)
-        running = storage.latest_running_run_for_creature(int(creature["id"]))
+        if normalized_scope == RUN_SCOPE_CHAT and conversation_id is not None:
+            running = storage.latest_running_run_for_conversation(int(conversation_id))
+            if running is not None:
+                return {
+                    "creature_slug": str(creature["slug"]),
+                    "conversation_id": int(conversation_id),
+                    "run_id": int(running["id"]),
+                    "sandbox_mode": str(running["sandbox_mode"] or "read-only"),
+                    "status": "locked",
+                    "run_scope": RUN_SCOPE_CHAT,
+                    "detail": "This chat is still running. Wait for the current reply to finish before sending another message here.",
+                }
+        running = (
+            storage.latest_running_activity_run_for_creature(int(creature["id"]))
+            if normalized_scope == RUN_SCOPE_ACTIVITY
+            else storage.latest_running_run_for_creature(int(creature["id"]))
+        )
         if running is None:
             raise
         return {
@@ -12298,8 +12299,7 @@ def start_background_run(
             "sandbox_mode": str(running["sandbox_mode"] or "read-only"),
             "status": "locked",
             "run_scope": RUN_SCOPE_CHAT if running["conversation_id"] is not None else RUN_SCOPE_ACTIVITY,
-            "busy_action": normalized_busy_action,
-            "deferred_scope": normalized_scope,
+            "detail": "This run is already in progress.",
         }
     thread = threading.Thread(target=_run_in_background, args=(prepared,), daemon=True)
     _remember_active_run_thread(int(prepared["run_id"]), thread)
@@ -12346,41 +12346,34 @@ def run_due_creatures(*, force_message: bool = False) -> list[dict[str, Any]]:
             continue
         creature_id = int(creature["id"])
         pending = pending_by_creature.get(creature_id)
-        running = storage.latest_running_run_for_creature(creature_id)
-        if running is not None:
-            if pending is not None:
-                storage.queue_conversation_action(
-                    int(pending["id"]),
-                    action=str(_row_value(pending, "pending_action") or BUSY_ACTION_QUEUE),
+        if pending is not None:
+            running_chat = storage.latest_running_run_for_conversation(int(pending["id"]))
+            if running_chat is None:
+                owner_mode = _normalize_owner_mode(_row_value(pending, "owner_mode"))
+                result = start_background_run(
+                    str(creature["slug"]),
+                    trigger_type="user_reply",
+                    force_message=force_message,
+                    conversation_id=int(pending["id"]),
+                    allow_code_changes=_allow_code_changes_for_owner_mode(owner_mode),
+                    run_scope=RUN_SCOPE_CHAT,
                 )
+                results.append(result)
+        due_habit = due_habit_by_creature.get(creature_id)
+        if due_habit is None:
+            continue
+        running_activity = storage.latest_running_activity_run_for_creature(creature_id)
+        if running_activity is not None:
             results.append(
                 {
                     "creature_slug": str(creature["slug"]),
-                    "conversation_id": int(running["conversation_id"]) if running["conversation_id"] is not None else None,
-                    "run_id": int(running["id"]),
-                    "sandbox_mode": str(running["sandbox_mode"] or "read-only"),
-                    "run_scope": RUN_SCOPE_CHAT if running["conversation_id"] is not None else RUN_SCOPE_ACTIVITY,
+                    "conversation_id": None,
+                    "run_id": int(running_activity["id"]),
+                    "sandbox_mode": str(running_activity["sandbox_mode"] or "read-only"),
+                    "run_scope": RUN_SCOPE_ACTIVITY,
                     "status": "deferred",
                 }
             )
-            continue
-        if pending is not None:
-            owner_mode = _normalize_owner_mode(_row_value(pending, "owner_mode"))
-            result = start_background_run(
-                str(creature["slug"]),
-                trigger_type="user_reply",
-                force_message=force_message,
-                conversation_id=int(pending["id"]),
-                allow_code_changes=_allow_code_changes_for_owner_mode(owner_mode),
-                run_scope=RUN_SCOPE_CHAT,
-                busy_action=str(_row_value(pending, "pending_action") or BUSY_ACTION_QUEUE),
-            )
-            if str(result.get("status") or "") == "running":
-                storage.clear_conversation_action(int(pending["id"]))
-            results.append(result)
-            continue
-        due_habit = due_habit_by_creature.get(creature_id)
-        if due_habit is None:
             continue
         results.append(
             start_background_run(
@@ -12471,7 +12464,6 @@ def reconcile_stranded_runs() -> int:
             notes_path=str(run["notes_path"] or "") or None,
         )
         if should_retry_chat:
-            storage.queue_conversation_action(int(run["conversation_id"]), action=BUSY_ACTION_STEER)
             storage.clear_creature_runtime_error(int(creature["id"]), next_run_at=retry_at)
         elif should_retry_activity:
             storage.clear_creature_runtime_error(int(creature["id"]), next_run_at=retry_at)
@@ -12670,15 +12662,13 @@ def dashboard_state(
                 transition_notice=str(notice or "").strip(),
             )
 
-        current_running_row = storage.latest_running_run_for_creature(creature_id)
-        current_running_scope = _run_scope_value(current_running_row)
+        current_running_row = (
+            storage.latest_running_run_for_conversation(int(selected_conversation["id"]))
+            if selected_conversation is not None
+            else None
+        )
         display_run_row = conversation_run
-        if (
-            display_run_row is None
-            and selected_conversation is not None
-            and current_running_row is not None
-            and current_running_scope != RUN_SCOPE_ACTIVITY
-        ):
+        if display_run_row is None and current_running_row is not None:
             display_run_row = current_running_row
         if display_run_row is not None:
             active_run = _decorate_run(display_run_row)
@@ -12695,38 +12685,17 @@ def dashboard_state(
                 if payload["display_body"]:
                     active_run_events.append(payload)
 
-        if current_running_row is not None and current_running_scope != RUN_SCOPE_ACTIVITY:
+        if current_running_row is not None and selected_conversation is not None:
             current_running = _decorate_run(current_running_row)
-            busy_conversation_id = (
-                int(current_running["conversation_id"])
-                if current_running["conversation_id"] is not None
-                else None
-            )
-            busy_conversation = storage.get_conversation(busy_conversation_id) if busy_conversation_id is not None else None
-            is_current_chat = bool(
-                selected_conversation is not None
-                and busy_conversation_id is not None
-                and int(selected_conversation["id"]) == busy_conversation_id
-            )
-            if str(current_running["run_scope"]) == RUN_SCOPE_ACTIVITY:
-                headline = f"{selected_creature['display_name']} is already running a scheduled habit."
-                detail = "Send a note now to steer what it handles next, or queue it behind the current work."
-            elif is_current_chat:
-                headline = f"{selected_creature['display_name']} is already working on this chat."
-                detail = "Send more guidance to steer the next follow-up, or queue it behind the current reply."
-            else:
-                headline = f"{selected_creature['display_name']} is already working in another chat."
-                chat_title = str(_row_value(busy_conversation, "title") or "Another chat")
-                detail = f'Current chat: "{chat_title}". Send a note here to steer what it handles next, or queue it behind the active run.'
             selected_busy_state = {
                 "is_busy": True,
-                "headline": headline,
-                "detail": detail,
+                "headline": f"{selected_creature['display_name']} is still working on this chat.",
+                "detail": "Wait for the current reply to finish before sending another message here. You can switch to another chat while it runs.",
                 "run_id": int(current_running["id"]),
                 "run_scope": str(current_running["run_scope"]),
-                "conversation_id": busy_conversation_id,
-                "conversation_title": str(_row_value(busy_conversation, "title") or ""),
-                "is_current_chat": is_current_chat,
+                "conversation_id": int(selected_conversation["id"]),
+                "conversation_title": str(_row_value(selected_conversation, "title") or ""),
+                "is_current_chat": True,
             }
 
         runs = [_decorate_run(row) for row in storage.recent_runs(creature_id, limit=100 if active_view == "activity" else 15)]

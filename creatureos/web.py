@@ -728,7 +728,6 @@ async def post_message(
     spawn_body_override: str = Form(""),
     model_override: str = Form(""),
     reasoning_effort_override: str = Form(""),
-    busy_action: str = Form("queue"),
     files: list[UploadFile] | None = File(None),
 ) -> Response:
     slug = str(service.canonical_creature_slug(slug))
@@ -783,9 +782,7 @@ async def post_message(
         "run_id": None,
         "sandbox_mode": "read-only",
         "status": str(message_result.get("status") or ""),
-        "busy_action": "",
         "run_scope": service.RUN_SCOPE_CHAT,
-        "deferred_scope": "",
     }
     if str(message_result.get("status") or "") != "waiting":
         run = await asyncio.to_thread(
@@ -796,7 +793,14 @@ async def post_message(
             conversation_id=conversation_id,
             allow_code_changes=True,
             run_scope=service.RUN_SCOPE_CHAT,
-            busy_action=busy_action,
+        )
+    if str(run.get("status") or "") == "locked":
+        detail = str(run.get("detail") or "This chat is still running. Wait for the current reply to finish before sending another message here.")
+        if request.headers.get("x-creatureos-ajax") == "1":
+            return JSONResponse({"detail": detail}, status_code=409)
+        return RedirectResponse(
+            url=_index_url(creature=slug, view=view, conversation_id=conversation_id),
+            status_code=303,
         )
     redirect_url = _index_url(creature=slug, view=view, conversation_id=conversation_id)
     if request.headers.get("x-creatureos-ajax") == "1":
@@ -812,9 +816,7 @@ async def post_message(
                     else ""
                 ),
                 "status": str(run.get("status") or "running"),
-                "busy_action": str(run.get("busy_action") or ""),
                 "run_scope": str(run.get("run_scope") or ""),
-                "deferred_scope": str(run.get("deferred_scope") or ""),
                 "waiting_message": str(message_result.get("waiting_message") or run.get("waiting_message") or ""),
             }
         )

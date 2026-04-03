@@ -3117,7 +3117,6 @@
       const streamUrl = String(payload?.stream_url || "");
       const runId = String(payload?.run_id || "");
       const status = String(payload?.status || "running");
-      const busyAction = String(payload?.busy_action || "queue");
       const runScope = String(payload?.run_scope || "");
       const waitingMessage = String(payload?.waiting_message || "").trim();
       if (status === "waiting") {
@@ -3136,14 +3135,6 @@
       }
       if (!redirectUrl || !streamUrl || !runId) {
         throw new Error("Missing run stream payload");
-      }
-      if (status === "locked") {
-        ensureRunFeedPanel({ runId, status: "running", streamUrl });
-        appendRunFeedLine(
-          busyAction === "steer"
-            ? "Will steer after current work…"
-            : "Queued behind current work…",
-        );
       }
       startRunFeedStream({
         runId,

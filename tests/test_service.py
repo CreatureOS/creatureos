@@ -4,6 +4,8 @@ import json
 import threading
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from creatureos import service
 from creatureos import storage
 
@@ -54,6 +56,23 @@ def test_send_user_message_creates_chat_and_queues_reply(create_test_creature):
     assert len(messages) == 1
     assert str(messages[0]["role"]) == "user"
     assert str(messages[0]["body"]) == "Hello there"
+
+
+def test_send_user_message_rejects_busy_current_chat(create_test_creature):
+    creature = create_test_creature(display_name="Juniper", concern="Keep the owner company.")
+    conversation = storage.create_conversation(int(creature["id"]), title="Busy Chat")
+    storage.create_run(
+        int(creature["id"]),
+        trigger_type="user_reply",
+        prompt_text="Reply in progress",
+        thread_id="thread-busy",
+        conversation_id=int(conversation["id"]),
+        run_scope=service.RUN_SCOPE_CHAT,
+        sandbox_mode="workspace-write",
+    )
+
+    with pytest.raises(ValueError, match="current reply to finish"):
+        service.send_user_message(str(creature["slug"]), int(conversation["id"]), "Are you there?")
 
 
 def test_set_creature_habit_enabled_toggles_habit(create_test_creature):
@@ -337,6 +356,50 @@ def test_activity_view_shows_selected_habit_log_oldest_first(create_test_creatur
         "First ponder summary",
         "Second ponder summary",
     ]
+
+
+def test_dashboard_state_only_locks_the_selected_chat(create_test_creature):
+    creature = create_test_creature(display_name="Mothwake", concern="Stay with the work.")
+    _seed_intro(creature)
+    first_chat = storage.create_conversation(int(creature["id"]), title="First chat")
+    second_chat = storage.create_conversation(int(creature["id"]), title="Second chat")
+    storage.create_message(
+        int(creature["id"]),
+        conversation_id=int(first_chat["id"]),
+        role="user",
+        body="Hello first chat",
+    )
+    storage.create_message(
+        int(creature["id"]),
+        conversation_id=int(second_chat["id"]),
+        role="user",
+        body="Hello second chat",
+    )
+    storage.create_run(
+        int(creature["id"]),
+        trigger_type="user_reply",
+        prompt_text="reply in first chat",
+        thread_id="thread-one",
+        conversation_id=int(first_chat["id"]),
+        run_scope=service.RUN_SCOPE_CHAT,
+        sandbox_mode="workspace-write",
+    )
+
+    other_chat_state = service.dashboard_state(
+        selected_slug=str(creature["slug"]),
+        view="chats",
+        conversation_id=int(second_chat["id"]),
+    )
+    assert other_chat_state["selected_busy_state"] is None
+
+    active_chat_state = service.dashboard_state(
+        selected_slug=str(creature["slug"]),
+        view="chats",
+        conversation_id=int(first_chat["id"]),
+    )
+    assert active_chat_state["selected_busy_state"] is not None
+    assert active_chat_state["selected_busy_state"]["is_busy"] is True
+    assert int(active_chat_state["selected_busy_state"]["conversation_id"]) == int(first_chat["id"])
 
 
 def test_classify_codex_launch_failure_as_local_issue():

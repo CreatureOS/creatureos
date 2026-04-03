@@ -1213,22 +1213,16 @@
                 <input type="file" name="files" multiple hidden data-chat-upload-input>
                 <div class="bar{% if selected_busy_state and selected_busy_state.is_busy %} bar--busy{% endif %}">
                   <div class="creature-compose-input-row">
-                    <textarea id="input" name="body" rows="1" placeholder="Message {{ selected_creature.display_name }}…" maxlength="4000"></textarea>
+                    <textarea id="input" name="body" rows="1" placeholder="{% if selected_busy_state and selected_busy_state.is_busy %}Wait for the current reply to finish in this chat…{% else %}Message {{ selected_creature.display_name }}…{% endif %}" maxlength="4000"{% if selected_busy_state and selected_busy_state.is_busy %} disabled aria-disabled="true"{% endif %}></textarea>
                     {% if not (selected_busy_state and selected_busy_state.is_busy) %}
                       <button class="btn-icon send" id="send" type="submit" aria-label="Send message">➤</button>
                     {% endif %}
                   </div>
                 </div>
                 <div class="creature-compose-attachments" data-compose-attachments hidden></div>
-                {% if selected_busy_state and selected_busy_state.is_busy %}
-                  <div class="creature-compose-actions">
-                    <button class="creature-action-btn creature-action-btn-secondary creature-compose-submit" type="submit" name="busy_action" value="steer">Steer now</button>
-                    <button class="creature-action-btn creature-compose-submit is-active" type="submit" name="busy_action" value="queue" data-busy-default-submit>Queue</button>
-                  </div>
-                {% endif %}
               </form>
               <div class="creature-compose-meta-row">
-                <button class="creature-compose-meta-btn creature-compose-attach-btn" type="button" aria-label="Attach files" data-chat-upload-button>+</button>
+                <button class="creature-compose-meta-btn creature-compose-attach-btn" type="button" aria-label="Attach files" data-chat-upload-button{% if selected_busy_state and selected_busy_state.is_busy %} disabled aria-disabled="true"{% endif %}>+</button>
                 {% if selected_chat %}
                   <form
                     class="creature-compose-thinking-form"

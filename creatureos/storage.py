@@ -211,12 +211,6 @@ def init_db() -> None:
                 PRIMARY KEY (creature_id, doc_key)
             );
 
-            CREATE TABLE IF NOT EXISTS run_locks (
-                creature_id INTEGER PRIMARY KEY REFERENCES creatures(id) ON DELETE CASCADE,
-                run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-                acquired_at TEXT NOT NULL
-            );
-
             CREATE TABLE IF NOT EXISTS memory_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 creature_id INTEGER NOT NULL REFERENCES creatures(id) ON DELETE CASCADE,
@@ -332,6 +326,34 @@ def init_db() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_conversations_creature_pending_action
             ON conversations(creature_id, pending_action, pending_action_at DESC, updated_at DESC, id DESC)
+            """
+        )
+        run_lock_columns = {
+            str(row["name"] or "")
+            for row in conn.execute("PRAGMA table_info(run_locks)").fetchall()
+        }
+        if run_lock_columns and {"conversation_id", "run_scope"} - run_lock_columns:
+            conn.execute("DROP TABLE run_locks")
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS run_locks (
+                run_id INTEGER PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+                creature_id INTEGER NOT NULL REFERENCES creatures(id) ON DELETE CASCADE,
+                conversation_id INTEGER REFERENCES conversations(id) ON DELETE CASCADE,
+                run_scope TEXT NOT NULL DEFAULT '',
+                acquired_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_run_locks_creature_recent
+            ON run_locks(creature_id, acquired_at DESC, run_id DESC);
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_run_locks_activity_creature
+            ON run_locks(creature_id)
+            WHERE run_scope = 'activity';
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_run_locks_chat_conversation
+            ON run_locks(conversation_id)
+            WHERE run_scope = 'chat' AND conversation_id IS NOT NULL;
             """
         )
         conn.execute(
@@ -1158,17 +1180,34 @@ def create_run(
     sandbox_mode: str = "read-only",
 ) -> sqlite3.Row:
     now = to_iso(utcnow())
+    final_scope = "chat" if str(run_scope or "").strip().lower() == "chat" or conversation_id is not None else "activity"
     with connect() as conn:
-        existing_lock = conn.execute(
-            """
-            SELECT run_id
-            FROM run_locks
-            WHERE creature_id = ?
-            """,
-            (creature_id,),
-        ).fetchone()
-        if existing_lock is not None:
-            raise RuntimeError(f"Creature {creature_id} already has an active run lock")
+        if final_scope == "chat":
+            if conversation_id is None:
+                raise RuntimeError("Chat runs require a conversation id")
+            existing_lock = conn.execute(
+                """
+                SELECT run_id
+                FROM run_locks
+                WHERE run_scope = 'chat'
+                  AND conversation_id = ?
+                """,
+                (conversation_id,),
+            ).fetchone()
+            if existing_lock is not None:
+                raise RuntimeError(f"Conversation {conversation_id} already has an active run lock")
+        else:
+            existing_lock = conn.execute(
+                """
+                SELECT run_id
+                FROM run_locks
+                WHERE run_scope = 'activity'
+                  AND creature_id = ?
+                """,
+                (creature_id,),
+            ).fetchone()
+            if existing_lock is not None:
+                raise RuntimeError(f"Creature {creature_id} already has an active activity run lock")
         cursor = conn.execute(
             """
             INSERT INTO runs (
@@ -1183,17 +1222,17 @@ def create_run(
                 thread_id,
                 prompt_text,
                 conversation_id,
-                run_scope,
+                final_scope,
                 sandbox_mode,
             ),
         )
         run_id = int(cursor.lastrowid)
         conn.execute(
             """
-            INSERT INTO run_locks (creature_id, run_id, acquired_at)
-            VALUES (?, ?, ?)
+            INSERT INTO run_locks (run_id, creature_id, conversation_id, run_scope, acquired_at)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (creature_id, run_id, now),
+            (run_id, creature_id, conversation_id, final_scope, now),
         )
         conn.execute(
             """
@@ -1227,6 +1266,23 @@ def finish_run(
     finished_at = utcnow()
     metadata_json = json.dumps(metadata or {}, sort_keys=True)
     with connect() as conn:
+        conn.execute(
+            """
+            DELETE FROM run_locks
+            WHERE run_id = ?
+            """,
+            (run_id,),
+        )
+        remaining_lock = conn.execute(
+            """
+            SELECT 1
+            FROM run_locks
+            WHERE creature_id = ?
+            LIMIT 1
+            """,
+            (creature_id,),
+        ).fetchone()
+        creature_status = "running" if remaining_lock is not None else ("idle" if status == "completed" else "error")
         conn.execute(
             """
             UPDATE runs
@@ -1267,20 +1323,13 @@ def finish_run(
             WHERE id = ?
             """,
             (
-                "idle" if status == "completed" else "error",
+                creature_status,
                 to_iso(finished_at),
                 to_iso(next_run_at) if next_run_at is not None else None,
                 error_text,
                 to_iso(finished_at),
                 creature_id,
             ),
-        )
-        conn.execute(
-            """
-            DELETE FROM run_locks
-            WHERE creature_id = ?
-            """,
-            (creature_id,),
         )
 
 def create_message(
@@ -1525,6 +1574,52 @@ def latest_running_run_for_creature(creature_id: int) -> sqlite3.Row | None:
             """,
             (creature_id,),
         ).fetchone()
+
+
+def latest_running_activity_run_for_creature(creature_id: int) -> sqlite3.Row | None:
+    with connect() as conn:
+        return conn.execute(
+            """
+            SELECT r.*
+            FROM runs r
+            INNER JOIN run_locks l ON l.run_id = r.id
+            WHERE l.creature_id = ?
+              AND l.run_scope = 'activity'
+            ORDER BY r.started_at DESC, r.id DESC
+            LIMIT 1
+            """,
+            (creature_id,),
+        ).fetchone()
+
+
+def latest_running_run_for_conversation(conversation_id: int) -> sqlite3.Row | None:
+    with connect() as conn:
+        return conn.execute(
+            """
+            SELECT r.*
+            FROM runs r
+            INNER JOIN run_locks l ON l.run_id = r.id
+            WHERE l.run_scope = 'chat'
+              AND l.conversation_id = ?
+            ORDER BY r.started_at DESC, r.id DESC
+            LIMIT 1
+            """,
+            (conversation_id,),
+        ).fetchone()
+
+
+def list_running_runs_for_creature(creature_id: int) -> list[sqlite3.Row]:
+    with connect() as conn:
+        return conn.execute(
+            """
+            SELECT r.*
+            FROM runs r
+            INNER JOIN run_locks l ON l.run_id = r.id
+            WHERE l.creature_id = ?
+            ORDER BY r.started_at DESC, r.id DESC
+            """,
+            (creature_id,),
+        ).fetchall()
 
 
 def get_state_surface_revision(creature_id: int, doc_key: str) -> int:
