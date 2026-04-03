@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 from datetime import datetime, timedelta, timezone
 
@@ -174,6 +175,47 @@ def test_summoning_name_fallback_skips_operational_brief_keywords(runtime_env, m
 
     assert preview["proposed_name"] == "Woodlands Echo"
     assert preview["alternates"] == []
+
+
+def test_parse_report_preserves_full_message_body():
+    complete_sentence = "This is a complete sentence."
+    closing_sentence = (
+        "If you want, I can tailor this to your exact setup: macOS, Windows, or Linux on the computer, "
+        "and iPhone or Android on the phone."
+    )
+    message_parts: list[str] = []
+    while len(" ".join(message_parts + [closing_sentence])) <= service.MAX_OWNER_UPDATE_PREVIEW_CHARS + 120:
+        message_parts.append(complete_sentence)
+    payload = json.dumps(
+        {
+            "summary": "A long reply",
+            "should_notify": True,
+            "severity": "info",
+            "message": " ".join(message_parts + [closing_sentence]),
+        }
+    )
+
+    report = service._parse_report(payload, fallback_prefix="Fallback")
+
+    assert report["message"] == " ".join(message_parts + [closing_sentence])
+
+
+def test_parse_report_preserves_non_json_message_body():
+    raw = "A plain-text Codex reply that should be stored whole without being chopped off."
+
+    report = service._parse_report(raw, fallback_prefix="Fallback")
+
+    assert report["message"] == raw
+
+
+def test_trim_owner_update_preview_falls_back_to_word_boundary_when_needed():
+    text = ("alpha " * 400).strip()
+
+    trimmed = service._trim_owner_update_preview(text, limit=120)
+
+    assert len(trimmed) <= 120
+    assert trimmed.endswith("...")
+    assert trimmed[:-3].endswith("alpha")
 
 
 def test_system_scan_roots_follow_likely_machine_work_dirs_not_workspace(runtime_env, tmp_path):

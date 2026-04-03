@@ -74,7 +74,7 @@ KEEPER_SUMMON_CHAT_TITLE = "Summon a creature"
 INTRODUCTION_CHAT_TITLE = "Introduction"
 INTRO_SURFACED_META_PREFIX = "intro_surfaced:"
 AUTO_SPAWN_PRIORITIES = {"high", "critical"}
-MAX_STANDING_MESSAGE_CHARS = 1200
+MAX_OWNER_UPDATE_PREVIEW_CHARS = 1200
 MAX_ACTIVITY_MARKDOWN_CHARS = 8000
 MAX_ACTIVITY_DELTA_ITEMS = 12
 MAX_KEEPER_ACTIVITY_DELTA_ITEMS = 18
@@ -5588,6 +5588,38 @@ def _notification_preview(text: str, *, limit: int = 280) -> str:
     return f"{cleaned[: limit - 3].rstrip()}..."
 
 
+def _trim_owner_update_preview(text: str, *, limit: int = MAX_OWNER_UPDATE_PREVIEW_CHARS) -> str:
+    cleaned = str(text or "").strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    if limit <= 3:
+        return cleaned[:limit]
+    cutoff = limit - 3
+    candidate = cleaned[:cutoff].rstrip()
+    if not candidate:
+        return cleaned[:limit]
+    minimum_boundary = max(80, cutoff // 2)
+    sentence_end = 0
+    for match in re.finditer(r"""[.!?](?=(?:["')\]]|[’”])?(?:\s|$))""", candidate):
+        sentence_end = match.end()
+    natural_boundaries = (
+        sentence_end,
+        candidate.rfind("\n\n"),
+        candidate.rfind("\n"),
+    )
+    for boundary in natural_boundaries:
+        if boundary >= minimum_boundary:
+            trimmed = candidate[:boundary].rstrip()
+            if trimmed:
+                return trimmed
+    word_boundary = candidate.rfind(" ")
+    if word_boundary >= minimum_boundary:
+        trimmed = candidate[:word_boundary].rstrip()
+        if trimmed:
+            return f"{trimmed}..."
+    return f"{candidate.rstrip()}..."
+
+
 def _strip_intro_lead(text: str, *, display_name: str) -> str:
     cleaned = str(text or "").strip()
     if not cleaned:
@@ -5859,7 +5891,7 @@ def _latest_completed_activity_run(creature_id: int) -> Any | None:
     return None
 
 
-def _standing_message_for_creature(creature: Any) -> str:
+def _latest_owner_update_for_creature(creature: Any) -> str:
     creature_id = int(_row_value(creature, "id") or 0)
     for row in storage.recent_runs(creature_id, limit=30):
         if str(_row_value(row, "status") or "").strip().lower() != "completed":
@@ -5870,7 +5902,7 @@ def _standing_message_for_creature(creature: Any) -> str:
             continue
         message_text = " ".join(str(_row_value(row, "message_text") or "").split())
         if message_text:
-            return message_text[:MAX_STANDING_MESSAGE_CHARS]
+            return _trim_owner_update_preview(message_text, limit=MAX_OWNER_UPDATE_PREVIEW_CHARS)
     return ""
 
 
@@ -9813,13 +9845,13 @@ def _working_surfaces_prompt_block(
 
 def _compact_state_prompt_block(creature: Any, *, context_texts: Sequence[str] = ()) -> str:
     purpose_summary_text = _trim_for_prompt(_state_surface_content(creature, PURPOSE_DOC_KEY), limit=900)
-    standing_message = _standing_message_for_creature(creature)
+    owner_update = _latest_owner_update_for_creature(creature)
     recent_activity = _recent_activity_headlines(creature, limit=3)
     sections = [
         "Compact durable state:",
         f"- Mission: {str(_row_value(creature, 'purpose_summary') or _row_value(creature, 'concern') or '').strip()}",
         f"- Purpose: {_trim_for_prompt(purpose_summary_text or 'No purpose yet.', limit=900)}",
-        f"- Current standing note to the owner: {standing_message or 'None yet.'}",
+        f"- Current owner-facing update: {owner_update or 'None yet.'}",
     ]
     origin_context = _origin_context_prompt_block(creature)
     if origin_context:
@@ -9867,7 +9899,7 @@ def _activity_review_prompt_block(creature: Any, *, habit: Mapping[str, Any] | N
     if habit is not None and int(habit.get("id") or 0) > 0:
         previous_run = _latest_completed_habit_run(int(creature["id"]), int(habit["id"])) or previous_run
     since_at = _run_finished_at(previous_run)
-    previous_standing_message = _standing_message_for_creature(creature)
+    previous_owner_update = _latest_owner_update_for_creature(creature)
     own_entries = _conversation_delta_entries(
         creature,
         since_at=since_at,
@@ -9888,11 +9920,11 @@ def _activity_review_prompt_block(creature: Any, *, habit: Mapping[str, Any] | N
         "- If this habit reveals a stable recurring routine, remember it as a routine so future scheduled work can reuse it.",
         "- Do your work according to your purpose, durable memory, and worklist.",
         "- Use the workspace, browser, attachments, and your workshop as needed. If repeated work would be easier with a helper script, template, or state file, make one in the workshop.",
-        "- If you have a real owner-facing update, treat message as the refreshed standing note for the creature surface.",
-        "- A good standing note centers one main issue, adds only the most useful supporting context, and ends with one invitation, question, or next step.",
+        "- If you have a real owner-facing update, treat message as your refreshed latest update for the owner.",
+        "- A good owner-facing update centers one main issue, adds only the most useful supporting context, and ends with one invitation, question, or next step.",
         "- If nothing meaningfully changed for the owner, leave message empty and set should_notify to false.",
         "- Treat activity_markdown as your first-person markdown report for the activity log.",
-        f"Previous standing note: {previous_standing_message or 'None yet.'}",
+        f"Previous owner-facing update: {previous_owner_update or 'None yet.'}",
         _format_conversation_delta_prompt(
             own_entries,
             title=conversation_delta_title,
@@ -10122,7 +10154,7 @@ def _parse_report(text: str, *, fallback_prefix: str) -> dict[str, Any]:
             "summary": fallback_prefix,
             "should_notify": True,
             "severity": "warning",
-            "message": cleaned[:700] or fallback_prefix,
+            "message": cleaned or fallback_prefix,
             "activity_note": "Codex returned non-JSON output; stored the raw reply for review.",
             "activity_markdown": "",
             "evidence": ["Codex returned non-JSON output"],
@@ -10142,7 +10174,7 @@ def _parse_report(text: str, *, fallback_prefix: str) -> dict[str, Any]:
         "summary": str(data.get("summary") or fallback_prefix)[:160],
         "should_notify": bool(data.get("should_notify")),
         "severity": str(data.get("severity") or "info")[:32],
-        "message": str(data.get("message") or fallback_prefix)[:MAX_STANDING_MESSAGE_CHARS],
+        "message": str(data.get("message") or fallback_prefix).strip(),
         "activity_note": str(data.get("activity_note") or data.get("thought") or "No activity note returned.")[:700],
         "activity_markdown": str(data.get("activity_markdown") or "")[:MAX_ACTIVITY_MARKDOWN_CHARS],
         "evidence": _parse_list(data.get("evidence"), limit=4, item_limit=180) or ["No explicit evidence returned"],
@@ -10873,7 +10905,7 @@ def _decorate_run(row: Any) -> dict[str, Any]:
     data["memory_actions"] = _parse_memory_actions(metadata.get("memory_actions"))
     data["activity_note"] = str(metadata.get("activity_note") or "")
     data["activity_markdown"] = str(metadata.get("activity_markdown") or "")
-    data["standing_message"] = str(data.get("message_text") or "")
+    data["owner_update"] = str(data.get("message_text") or "")
     data["next_focus"] = str(metadata.get("next_focus") or "")
     data["spawned_conversation_title"] = str(metadata.get("spawned_conversation_title") or "")
     data["owner_mode"] = str(metadata.get("owner_mode") or "")
@@ -11957,7 +11989,7 @@ def _execute_prepared_run(
         if run_scope == RUN_SCOPE_ACTIVITY and should_notify and not raw_message_text:
             raw_message_text = _notification_preview(
                 str(report.get("summary") or report.get("activity_note") or f"{creature['display_name']} completed a pass."),
-                limit=MAX_STANDING_MESSAGE_CHARS,
+                limit=MAX_OWNER_UPDATE_PREVIEW_CHARS,
             )
         should_create_intro = bool(
             run_scope == RUN_SCOPE_ACTIVITY
