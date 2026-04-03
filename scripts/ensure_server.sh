@@ -18,6 +18,16 @@ PY
 )"
   export CREATURE_OS_DATA_DIR="$DATA_DIR"
 fi
+if [[ -n "${CREATURE_OS_DB_PATH:-}" ]]; then
+  DB_PATH="$CREATURE_OS_DB_PATH"
+else
+  DB_PATH="$("$PYTHON_BIN" - <<'PY'
+from creatureos import config
+print(config.db_path())
+PY
+)"
+  export CREATURE_OS_DB_PATH="$DB_PATH"
+fi
 LOCK_FILE="$DATA_DIR/server_watchdog.lock"
 PID_FILE="$DATA_DIR/server.pid"
 mkdir -p "$DATA_DIR"
@@ -103,8 +113,29 @@ start_server() {
   (
     export CREATURE_OS_WORKSPACE_ROOT="$WORKSPACE_ROOT"
     export CREATURE_OS_DATA_DIR="$DATA_DIR"
+    export CREATURE_OS_DB_PATH="$DB_PATH"
     export CREATURE_OS_SERVE_TAILSCALE="${CREATURE_OS_SERVE_TAILSCALE:-1}"
-    nohup /bin/bash "$SCRIPT_DIR/serve.sh" >/dev/null 2>&1 < /dev/null &
+    exec 9>&-
+    cmd=(
+      "$PYTHON_BIN"
+      -m
+      creatureos.cli
+      --workspace
+      "$WORKSPACE_ROOT"
+      --data-dir
+      "$DATA_DIR"
+      --db-path
+      "$DB_PATH"
+      serve
+    )
+    if [[ "${CREATURE_OS_SERVE_TAILSCALE:-1}" == "1" ]]; then
+      cmd+=("--tailscale")
+    fi
+    if command -v setsid >/dev/null 2>&1; then
+      setsid "${cmd[@]}" >>"$DATA_DIR/server.log" 2>&1 < /dev/null &
+    else
+      nohup "${cmd[@]}" >>"$DATA_DIR/server.log" 2>&1 < /dev/null &
+    fi
   )
 }
 
